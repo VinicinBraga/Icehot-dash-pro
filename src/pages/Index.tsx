@@ -16,7 +16,7 @@ import { DataTable } from "@/components/DataTable";
 import { mockKpis, mockTableWater, mockTableUsage, mockEquipmentTable, mockLocationTable } from "@/lib/mockData";
 
 // Lazy load map to avoid SSR issues
-const MapView = lazy(() => import("@/components/MapView").then(m => ({ default: m.MapView })));
+const MapView = lazy(() => import("@/components/MapView"));
 
 interface DateRange {
   from: Date;

@@ -27,7 +27,7 @@ function MapBounds() {
   return null;
 }
 
-export function MapView() {
+export default function MapView() {
   return (
     <Card className="p-6 rounded-2xl shadow-sm border border-border h-[600px]">
       <h3 className="text-lg font-semibold mb-4">Localização dos Equipamentos</h3>
