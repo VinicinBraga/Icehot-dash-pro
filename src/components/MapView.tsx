@@ -1,6 +1,5 @@
-import { useEffect, useMemo } from "react";
+import { useEffect } from "react";
 import { MapContainer, TileLayer, Marker, Popup, useMap } from "react-leaflet";
-import MarkerClusterGroup from "react-leaflet-cluster";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { Card } from "@/components/ui/card";
@@ -29,23 +28,6 @@ function MapBounds() {
 }
 
 export function MapView() {
-  const markers = useMemo(
-    () =>
-      mockMapPoints.map((point, idx) => (
-        <Marker key={idx} position={[point.lat, point.lng]}>
-          <Popup>
-            <div className="p-2">
-              <h4 className="font-semibold">{point.cidade} - {point.uf}</h4>
-              <p className="text-sm">Equipamentos: {point.qtd}</p>
-              <p className="text-sm">Litros: {formatNumber(point.litros)}</p>
-              <p className="text-sm">Status: {point.status}</p>
-            </div>
-          </Popup>
-        </Marker>
-      )),
-    []
-  );
-
   return (
     <Card className="p-6 rounded-2xl shadow-sm border border-border h-[600px]">
       <h3 className="text-lg font-semibold mb-4">Localização dos Equipamentos</h3>
@@ -60,7 +42,18 @@ export function MapView() {
             attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
             url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
           />
-          <MarkerClusterGroup chunkedLoading>{markers}</MarkerClusterGroup>
+          {mockMapPoints.map((point, idx) => (
+            <Marker key={idx} position={[point.lat, point.lng]}>
+              <Popup>
+                <div className="p-2">
+                  <h4 className="font-semibold">{point.cidade} - {point.uf}</h4>
+                  <p className="text-sm">Equipamentos: {point.qtd}</p>
+                  <p className="text-sm">Litros: {formatNumber(point.litros)}</p>
+                  <p className="text-sm">Status: {point.status}</p>
+                </div>
+              </Popup>
+            </Marker>
+          ))}
           <MapBounds />
         </MapContainer>
       </div>
