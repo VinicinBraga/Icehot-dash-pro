@@ -2,27 +2,32 @@ import { Card } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import { formatNumber } from "@/lib/format";
 
-interface KpiCardProps {
+type KpiCardProps = {
   label: string;
   value: number;
-  suffix?: string;
   helpText?: string;
-  className?: string;
-}
+  suffix?: string;
+  formatter?: (n: number) => string; // <--- NOVO
+};
 
-export function KpiCard({ label, value, suffix, helpText, className }: KpiCardProps) {
+export function KpiCard({
+  label,
+  value,
+  helpText,
+  suffix,
+  formatter,
+}: KpiCardProps) {
+  const text = formatter ? formatter(value) : String(value);
   return (
-    <Card className={cn("p-6 rounded-2xl shadow-sm border border-border", className)}>
-      <div className="space-y-1">
-        <p className="text-sm text-muted-foreground">{label}</p>
-        <div className="flex items-baseline gap-1">
-          <p className="text-3xl font-bold text-foreground">
-            {formatNumber(value)}
-          </p>
-          {suffix && <span className="text-lg text-muted-foreground">{suffix}</span>}
-        </div>
-        {helpText && <p className="text-xs text-muted-foreground mt-1">{helpText}</p>}
+    <div className="rounded-2xl border border-border bg-card p-4">
+      <div className="text-sm text-muted-foreground">{label}</div>
+      <div className="text-2xl font-semibold">
+        {text}
+        {suffix ? ` ${suffix}` : ""}
       </div>
-    </Card>
+      {helpText && (
+        <div className="text-xs text-muted-foreground mt-1">{helpText}</div>
+      )}
+    </div>
   );
 }

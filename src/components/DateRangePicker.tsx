@@ -1,61 +1,127 @@
-import { useState } from "react";
+// src/components/DateRangePicker.tsx
+import { useMemo, useState } from "react";
 import { CalendarIcon } from "lucide-react";
-import { format, subDays, startOfMonth, endOfMonth, startOfYear } from "date-fns";
+import {
+  format,
+  subDays,
+  startOfMonth,
+  endOfMonth,
+  startOfYear,
+  parseISO,
+  isValid,
+} from "date-fns";
 import { ptBR } from "date-fns/locale";
 import { Button } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Input } from "@/components/ui/input";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 
 interface DateRange {
   from: Date;
   to: Date;
 }
-
 interface DateRangePickerProps {
   value: DateRange;
   onChange: (range: DateRange) => void;
 }
 
 export function DateRangePicker({ value, onChange }: DateRangePickerProps) {
-  const [isOpen, setIsOpen] = useState(false);
+  const [open, setOpen] = useState(false);
+
+  // estado rascunho para o calendário/inputs (não fecha no 1º clique)
+  const [draft, setDraft] = useState<DateRange>(() => ({
+    from: value.from,
+    to: value.to,
+  }));
+
+  // sempre que abrir, sincroniza draft com o value atual
+  const handleOpenChange = (v: boolean) => {
+    setOpen(v);
+    if (v) setDraft({ from: value.from, to: value.to });
+  };
+
+  const pretty = useMemo(() => {
+    if (!value?.from || !value?.to) return "Selecione o período";
+    const sameYear = value.from.getFullYear() === value.to.getFullYear();
+    const left = format(value.from, "dd MMM", { locale: ptBR });
+    const right = format(value.to, sameYear ? "dd MMM, yyyy" : "dd MMM, yyyy", {
+      locale: ptBR,
+    });
+    return `${left} - ${right}`;
+  }, [value]);
 
   const presets = [
-    { label: 'Hoje', getValue: () => ({ from: new Date(), to: new Date() }) },
-    { label: '7 dias', getValue: () => ({ from: subDays(new Date(), 7), to: new Date() }) },
-    { label: '30 dias', getValue: () => ({ from: subDays(new Date(), 30), to: new Date() }) },
-    { label: 'Mês Atual', getValue: () => ({ from: startOfMonth(new Date()), to: endOfMonth(new Date()) }) },
-    { label: 'YTD', getValue: () => ({ from: startOfYear(new Date()), to: new Date() }) },
+    { label: "Hoje", getValue: () => ({ from: new Date(), to: new Date() }) },
+    {
+      label: "7 dias",
+      getValue: () => ({ from: subDays(new Date(), 7), to: new Date() }),
+    },
+    {
+      label: "30 dias",
+      getValue: () => ({ from: subDays(new Date(), 30), to: new Date() }),
+    },
+    {
+      label: "Mês Atual",
+      getValue: () => ({
+        from: startOfMonth(new Date()),
+        to: endOfMonth(new Date()),
+      }),
+    },
+    {
+      label: "Ano Atual",
+      getValue: () => ({ from: startOfYear(new Date()), to: new Date() }),
+    },
   ];
 
+  // helpers p/ inputs (YYYY-MM-DD)
+  const toYMD = (d: Date) =>
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
+      d.getDate()
+    ).padStart(2, "0")}`;
+
+  const setDraftFrom = (s: string) => {
+    const d = parseISO(s);
+    if (isValid(d))
+      setDraft((prev) => ({ from: d, to: prev.to < d ? d : prev.to }));
+  };
+  const setDraftTo = (s: string) => {
+    const d = parseISO(s);
+    if (isValid(d))
+      setDraft((prev) => ({ from: prev.from > d ? d : prev.from, to: d }));
+  };
+
   return (
-    <Popover open={isOpen} onOpenChange={setIsOpen}>
+    <Popover
+      open={open}
+      onOpenChange={handleOpenChange}
+      /* @radix/shadcn suporta modal */ modal
+    >
       <PopoverTrigger asChild>
         <Button
           variant="outline"
-          className={cn(
-            "justify-start text-left font-normal rounded-xl",
-            !value && "text-muted-foreground"
-          )}
+          className={cn("justify-start text-left font-normal rounded-xl")}
+          onClick={() => setOpen(true)}
         >
           <CalendarIcon className="mr-2 h-4 w-4" />
-          {value?.from ? (
-            value.to ? (
-              <>
-                {format(value.from, "dd MMM", { locale: ptBR })} -{" "}
-                {format(value.to, "dd MMM, yyyy", { locale: ptBR })}
-              </>
-            ) : (
-              format(value.from, "dd MMM, yyyy", { locale: ptBR })
-            )
-          ) : (
-            <span>Selecione o período</span>
-          )}
+          {pretty}
         </Button>
       </PopoverTrigger>
-      <PopoverContent className="w-auto p-0" align="end">
-        <div className="flex">
-          <div className="border-r p-3 space-y-1">
+
+      <PopoverContent
+        className="w-auto p-0"
+        align="end"
+        onOpenAutoFocus={(e) => e.preventDefault()}
+        onCloseAutoFocus={(e) => e.preventDefault()}
+        onInteractOutside={(e) => e.preventDefault()} // nunca fecha “sem querer”
+      >
+        <div className="flex" onMouseDown={(e) => e.stopPropagation()}>
+          {/* Presets */}
+          <div className="border-r p-3 space-y-1 min-w-[140px]">
             {presets.map((preset) => (
               <Button
                 key={preset.label}
@@ -63,27 +129,77 @@ export function DateRangePicker({ value, onChange }: DateRangePickerProps) {
                 size="sm"
                 className="w-full justify-start"
                 onClick={() => {
-                  onChange(preset.getValue());
-                  setIsOpen(false);
+                  const p = preset.getValue();
+                  setDraft(p);
                 }}
               >
                 {preset.label}
               </Button>
             ))}
           </div>
-          <Calendar
-            mode="range"
-            selected={{ from: value.from, to: value.to }}
-            onSelect={(range) => {
-              if (range?.from && range?.to) {
-                onChange({ from: range.from, to: range.to });
-                setIsOpen(false);
-              }
-            }}
-            numberOfMonths={2}
-            locale={ptBR}
-            className="pointer-events-auto"
-          />
+
+          {/* Calendário + inputs */}
+          <div className="p-3 space-y-3">
+            {/* Inputs de data */}
+            <div className="grid grid-cols-2 gap-2">
+              <div className="space-y-1">
+                <label className="text-xs text-muted-foreground">De</label>
+                <Input
+                  type="date"
+                  value={toYMD(draft.from)}
+                  onChange={(e) => setDraftFrom(e.target.value)}
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs text-muted-foreground">Até</label>
+                <Input
+                  type="date"
+                  value={toYMD(draft.to)}
+                  onChange={(e) => setDraftTo(e.target.value)}
+                />
+              </div>
+            </div>
+
+            <Calendar
+              initialFocus
+              mode="range"
+              numberOfMonths={2}
+              locale={ptBR}
+              defaultMonth={draft.from ?? new Date()}
+              selected={{ from: draft.from, to: draft.to }}
+              onSelect={(range) => {
+                if (!range) return;
+                // 1º clique: define só o from (to = from para exibir seleção)
+                if (range.from && !range.to) {
+                  setDraft({ from: range.from, to: range.from });
+                  return;
+                }
+                // 2º clique: fecha o range no to
+                if (range.from && range.to) {
+                  setDraft({ from: range.from, to: range.to });
+                }
+              }}
+              className="pointer-events-auto"
+            />
+
+            <div className="flex items-center justify-end gap-2">
+              <Button variant="ghost" size="sm" onClick={() => setOpen(false)}>
+                Cancelar
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => {
+                  const from = draft.from;
+                  const to = draft.to < draft.from ? draft.from : draft.to;
+                  onChange({ from, to });
+                  setOpen(false);
+                }}
+              >
+                Aplicar
+              </Button>
+            </div>
+          </div>
         </div>
       </PopoverContent>
     </Popover>

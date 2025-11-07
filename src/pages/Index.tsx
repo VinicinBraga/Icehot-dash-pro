@@ -1,3 +1,4 @@
+// src/pages/Index.tsx
 import { useState, lazy, Suspense } from "react";
 import { subDays } from "date-fns";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -13,31 +14,69 @@ import { ModelPieChart } from "@/components/ModelPieChart";
 import { InstallationChart } from "@/components/InstallationChart";
 import { CumulativeChart } from "@/components/CumulativeChart";
 import { DataTable } from "@/components/DataTable";
-import { mockKpis, mockTableWater, mockTableUsage, mockEquipmentTable, mockLocationTable } from "@/lib/mockData";
+import {
+  mockTableWater,
+  mockEquipmentTable,
+  mockLocationTable,
+} from "@/lib/mockData";
 
-// Lazy load map to avoid SSR issues
-const MapView = lazy(() => import("@/components/MapView"));
+import { useKpis } from "@/hooks/useKpis";
+import { useWaterSeries, useTriggerSeries } from "@/hooks/useSeries";
+import { useModelPie } from "@/hooks/useModels";
+import { useWaterTable } from "@/hooks/useWaterTable";
+import { useFilters } from "@/hooks/useFilters";
+import { useTriggerTable } from "@/hooks/useTriggerTable";
+
+import {
+  formatLiters,
+  formatClicks,
+  formatCO2,
+  formatBottles,
+} from "@/lib/format";
+
+import type { Filters } from "@/lib/types"; // 👈 usamos o tipo centralizado
 
 interface DateRange {
   from: Date;
   to: Date;
 }
 
-interface Filters {
-  usuario?: number;
-  modelo?: number;
-  equipamento?: number;
-  serie?: string;
-  status?: string;
-}
+// Lazy load map to avoid SSR issues
+const MapView = lazy(() => import("@/components/MapView"));
 
 const Index = () => {
+  // período padrão (últimos 30 dias)
   const [dateRange, setDateRange] = useState<DateRange>({
     from: subDays(new Date(), 30),
     to: new Date(),
   });
+
+  // opções dos selects (vem do backend)
+  const {
+    data: filterOptions,
+    loading: filtersLoading,
+    error: filtersError,
+  } = useFilters();
+
+  // estado dos filtros selecionados
   const [filters, setFilters] = useState<Filters>({});
   const [activeTab, setActiveTab] = useState("overview");
+
+  // ==== chamadas de dados (agora TODAS recebem os filtros) ====
+  const {
+    data: kpis,
+    loading: kpisLoading,
+    error: kpisError,
+  } = useKpis(dateRange, filters);
+
+  const water = useWaterSeries(dateRange, filters);
+  const trig = useTriggerSeries(dateRange, filters);
+  const modelPie = useModelPie(dateRange, filters);
+  const waterTable = useWaterTable(dateRange, filters);
+  const triggerTable = useTriggerTable(dateRange, filters);
+
+  // helper: valor com fallback durante loading
+  const val = (n?: number) => (kpisLoading || !kpis ? 0 : n ?? 0);
 
   return (
     <div className="min-h-screen bg-background">
@@ -46,7 +85,9 @@ const Index = () => {
         <div className="container mx-auto px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="h-10 w-10 rounded-xl bg-primary flex items-center justify-center">
-              <span className="text-primary-foreground font-bold text-lg">IH</span>
+              <span className="text-primary-foreground font-bold text-lg">
+                IH
+              </span>
             </div>
             <h1 className="text-2xl font-bold">Icehot Dashboard</h1>
           </div>
@@ -57,7 +98,13 @@ const Index = () => {
       {/* Main Content */}
       <main className="container mx-auto px-6 py-6 space-y-6">
         {/* Filters */}
-        <FilterBar filters={filters} onChange={setFilters} />
+        <FilterBar
+          filters={filters}
+          onChange={setFilters}
+          options={filterOptions ?? undefined}
+          loading={filtersLoading}
+          error={filtersError ?? null}
+        />
 
         {/* Tabs */}
         <Tabs value={activeTab} onValueChange={setActiveTab}>
@@ -78,95 +125,117 @@ const Index = () => {
 
           {/* Overview Tab */}
           <TabsContent value="overview" className="space-y-6 mt-6">
+            {kpisError && (
+              <Badge variant="destructive">
+                Erro ao carregar KPIs: {String(kpisError)}
+              </Badge>
+            )}
+
             {/* Water KPIs */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
               <KpiCard
                 label="Total – Litros de Água"
-                value={mockKpis.water.total}
+                value={val(kpis?.water.total)}
                 helpText="Volume total distribuído"
+                suffix="L"
+                formatter={formatLiters}
               />
               <KpiCard
                 label="Água Fria"
-                value={mockKpis.water.fria}
+                value={val(kpis?.water.fria)}
                 helpText="Litros de água fria"
+                suffix="L"
+                formatter={formatLiters}
               />
               <KpiCard
                 label="Água Quente"
-                value={mockKpis.water.quente}
+                value={val(kpis?.water.quente)}
                 helpText="Litros de água quente"
+                suffix="L"
+                formatter={formatLiters}
               />
               <KpiCard
                 label="Pets"
-                value={mockKpis.water.pets}
+                value={val(kpis?.water.pets)}
                 helpText="Litros para pets"
+                suffix="L"
+                formatter={formatLiters}
               />
             </div>
 
-            {/* Trigger KPIs */}
+            {/* Trigger KPIs (cliques) */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
               <KpiCard
                 label="Total – Acionamentos"
-                value={mockKpis.triggers.total}
+                value={val(kpis?.triggers.total)}
                 helpText="Total de acionamentos"
+                formatter={formatClicks}
               />
               <KpiCard
                 label="Acionamento – Fria"
-                value={mockKpis.triggers.fria}
+                value={val(kpis?.triggers.fria)}
                 helpText="Acionamentos água fria"
+                formatter={formatClicks}
               />
               <KpiCard
                 label="Acionamento – Quente"
-                value={mockKpis.triggers.quente}
+                value={val(kpis?.triggers.quente)}
                 helpText="Acionamentos água quente"
+                formatter={formatClicks}
               />
               <KpiCard
                 label="Acionamento – Pets"
-                value={mockKpis.triggers.pets}
+                value={val(kpis?.triggers.pets)}
                 helpText="Acionamentos pets"
+                formatter={formatClicks}
               />
             </div>
 
-            {/* Additional KPIs */}
+            {/* Extras */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <KpiCard
                 label="Equipamentos Utilizados"
-                value={mockKpis.equipamentos_utilizados}
+                value={val(kpis?.equipamentos_utilizados)}
                 helpText="Equipamentos ativos no período"
               />
               <KpiCard
                 label="Garrafas Poupadas"
-                value={mockKpis.garrafas_poupadas}
+                value={val(kpis?.garrafas_poupadas)}
                 helpText="Garrafas plásticas economizadas"
+                formatter={formatBottles}
               />
               <KpiCard
                 label="CO₂ Poupado"
-                value={mockKpis.co2_poupado_m3}
-                suffix="m³"
+                value={val(kpis?.co2_poupado_m3)}
+                suffix=" m³"
                 helpText="Emissão de CO₂ evitada"
+                formatter={formatCO2}
               />
             </div>
 
             {/* Charts */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              <WaterChart />
-              <TriggerChart />
+              <WaterChart data={water.data ?? undefined} />
+              <TriggerChart data={trig.data ?? undefined} />
             </div>
 
-            <ModelPieChart />
+            <ModelPieChart data={modelPie.data ?? undefined} />
 
             {/* Tables */}
             <div className="space-y-6">
               <DataTable
                 title="Litros x Equipamentos"
-                columns={mockTableWater.columns}
-                rows={mockTableWater.rows}
-                total={mockTableWater.total}
+                columns={waterTable.data?.columns ?? mockTableWater.columns}
+                rows={waterTable.data?.rows ?? mockTableWater.rows}
+                total={waterTable.data?.total ?? mockTableWater.total}
               />
               <DataTable
                 title="Utilização x Equipamentos"
-                columns={mockTableUsage.columns}
-                rows={mockTableUsage.rows}
-                total={mockTableUsage.total}
+                columns={
+                  triggerTable.data?.columns ?? ["Equipamento", "Acionamentos"]
+                }
+                rows={triggerTable.data?.rows ?? []}
+                total={triggerTable.data?.total ?? 0}
               />
             </div>
           </TabsContent>

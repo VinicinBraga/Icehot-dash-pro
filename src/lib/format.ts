@@ -1,19 +1,16 @@
-export function formatNumber(value: number): string {
-  if (value >= 1_000_000_000) {
-    return `${(value / 1_000_000_000).toFixed(1)}bi`;
-  }
-  if (value >= 1_000_000) {
-    return `${(value / 1_000_000).toFixed(1)}mi`;
-  }
-  if (value >= 1_000) {
-    return `${(value / 1_000).toFixed(1)}k`;
-  }
-  return value.toLocaleString('pt-BR');
+export function formatNumber(
+  value: number,
+  opts?: { decimals?: number }
+) {
+  const { decimals = 2 } = opts || {};
+  return new Intl.NumberFormat("pt-BR", {
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals,
+  }).format(value);
 }
 
-export function formatLiters(value: number): string {
-  return formatNumber(value);
-}
+export const formatLiters = (n?: number) =>
+  `${formatNumber(n ?? 0, { decimals: 2 })}`;
 
 export function formatDate(date: Date | string): string {
   const d = typeof date === 'string' ? new Date(date) : date;
@@ -26,3 +23,13 @@ export function toNumber(value: unknown): number {
   const num = Number(str);
   return isNaN(num) ? 0 : num;
 }
+
+
+export const formatClicks = (n?: number) =>
+  `${formatNumber(n ?? 0, { decimals: 0 })}`;
+
+  export const formatBottles = (n?: number) =>
+  `${formatNumber(n ?? 0, { decimals: 2 })}`;
+
+  export const formatCO2 = (n?: number) =>
+  `${formatNumber(n ?? 0, { decimals: 2 })}`;

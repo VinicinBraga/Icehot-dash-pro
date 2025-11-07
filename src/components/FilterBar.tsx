@@ -1,5 +1,13 @@
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { useMemo } from "react";
 import { mockFilterOptions } from "@/lib/mockData";
+import type { FilterOptions } from "@/lib/types";
+import {
+  Select,
+  SelectTrigger,
+  SelectValue,
+  SelectContent,
+  SelectItem,
+} from "@/components/ui/select";
 
 interface Filters {
   usuario?: number;
@@ -12,21 +20,51 @@ interface Filters {
 interface FilterBarProps {
   filters: Filters;
   onChange: (filters: Filters) => void;
+  // 🔹 novos props para dados reais
+  options?: FilterOptions | null;
+  loading?: boolean;
+  error?: string | null;
 }
 
-export function FilterBar({ filters, onChange }: FilterBarProps) {
+export function FilterBar({
+  filters,
+  onChange,
+  options,
+  loading = false,
+}: FilterBarProps) {
+  // fallback para mocks se ainda não veio nada do backend
+  const opts: FilterOptions = useMemo(() => {
+    if (
+      options &&
+      (options.usuarios?.length ||
+        options.modelos?.length ||
+        options.equipamentos?.length ||
+        options.series?.length)
+    ) {
+      return options;
+    }
+    return mockFilterOptions;
+  }, [options]);
+
   return (
     <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-4 p-6 bg-card rounded-2xl border border-border shadow-sm">
+      {/* Usuário */}
       <Select
         value={filters.usuario?.toString()}
-        onValueChange={(value) => onChange({ ...filters, usuario: value === 'all' ? undefined : Number(value) })}
+        onValueChange={(value) =>
+          onChange({
+            ...filters,
+            usuario: value === "all" ? undefined : Number(value),
+          })
+        }
+        disabled={loading}
       >
         <SelectTrigger className="rounded-xl">
           <SelectValue placeholder="Usuário" />
         </SelectTrigger>
         <SelectContent>
           <SelectItem value="all">Todos</SelectItem>
-          {mockFilterOptions.usuarios.map((u) => (
+          {opts.usuarios.map((u) => (
             <SelectItem key={u.value} value={u.value.toString()}>
               {u.label}
             </SelectItem>
@@ -34,16 +72,23 @@ export function FilterBar({ filters, onChange }: FilterBarProps) {
         </SelectContent>
       </Select>
 
+      {/* Modelo */}
       <Select
         value={filters.modelo?.toString()}
-        onValueChange={(value) => onChange({ ...filters, modelo: value === 'all' ? undefined : Number(value) })}
+        onValueChange={(value) =>
+          onChange({
+            ...filters,
+            modelo: value === "all" ? undefined : Number(value),
+          })
+        }
+        disabled={loading}
       >
         <SelectTrigger className="rounded-xl">
           <SelectValue placeholder="Modelo" />
         </SelectTrigger>
         <SelectContent>
           <SelectItem value="all">Todos</SelectItem>
-          {mockFilterOptions.modelos.map((m) => (
+          {opts.modelos.map((m) => (
             <SelectItem key={m.value} value={m.value.toString()}>
               {m.label}
             </SelectItem>
@@ -51,16 +96,23 @@ export function FilterBar({ filters, onChange }: FilterBarProps) {
         </SelectContent>
       </Select>
 
+      {/* Equipamento */}
       <Select
         value={filters.equipamento?.toString()}
-        onValueChange={(value) => onChange({ ...filters, equipamento: value === 'all' ? undefined : Number(value) })}
+        onValueChange={(value) =>
+          onChange({
+            ...filters,
+            equipamento: value === "all" ? undefined : Number(value),
+          })
+        }
+        disabled={loading}
       >
         <SelectTrigger className="rounded-xl">
           <SelectValue placeholder="Equipamento" />
         </SelectTrigger>
         <SelectContent>
           <SelectItem value="all">Todos</SelectItem>
-          {mockFilterOptions.equipamentos.map((e) => (
+          {opts.equipamentos.map((e) => (
             <SelectItem key={e.value} value={e.value.toString()}>
               {e.label}
             </SelectItem>
@@ -68,16 +120,20 @@ export function FilterBar({ filters, onChange }: FilterBarProps) {
         </SelectContent>
       </Select>
 
+      {/* Nº de Série */}
       <Select
         value={filters.serie}
-        onValueChange={(value) => onChange({ ...filters, serie: value === 'all' ? undefined : value })}
+        onValueChange={(value) =>
+          onChange({ ...filters, serie: value === "all" ? undefined : value })
+        }
+        disabled={loading}
       >
         <SelectTrigger className="rounded-xl">
           <SelectValue placeholder="Nº de Série" />
         </SelectTrigger>
         <SelectContent>
           <SelectItem value="all">Todos</SelectItem>
-          {mockFilterOptions.series.map((s) => (
+          {opts.series.map((s) => (
             <SelectItem key={s.value} value={s.value}>
               {s.label}
             </SelectItem>
@@ -85,16 +141,20 @@ export function FilterBar({ filters, onChange }: FilterBarProps) {
         </SelectContent>
       </Select>
 
+      {/* Status */}
       <Select
         value={filters.status}
-        onValueChange={(value) => onChange({ ...filters, status: value === 'all' ? undefined : value })}
+        onValueChange={(value) =>
+          onChange({ ...filters, status: value === "all" ? undefined : value })
+        }
+        disabled={loading}
       >
         <SelectTrigger className="rounded-xl">
           <SelectValue placeholder="Status" />
         </SelectTrigger>
         <SelectContent>
           <SelectItem value="all">Todos</SelectItem>
-          {mockFilterOptions.status.map((s) => (
+          {opts.status.map((s) => (
             <SelectItem key={s.value} value={s.value}>
               {s.label}
             </SelectItem>
