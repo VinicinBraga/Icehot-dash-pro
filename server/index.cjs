@@ -41,10 +41,10 @@ async function resolveMachineIds(userEmail, q = {}) {
   const usuario = asNum(q.usuario); // users.id (opcional)
   const modelo = asNum(q.modelo); // tipos.id
   const equipamento = asNum(q.equipamento); // maquinas.id
-  const serie = q.serie?.trim(); // numeroSerieEquipamento | serialNumber
-  const status = q.status?.trim(); // "Ativo" | "Inativo" | variações
+  const serie = q.serie?.trim();
+  const status = q.status?.trim(); // "Ativo" | "Inativo" | outros
 
-  // Base: máquinas vinculadas ao usuário do header
+  // 1) Base: máquinas vinculadas ao usuário do header
   const [baseRows] = await pool.query(
     `SELECT ue.maquina_id
        FROM users u
@@ -52,14 +52,15 @@ async function resolveMachineIds(userEmail, q = {}) {
       WHERE u.email = ?`,
     [userEmail]
   );
-  const baseIds = baseRows.map((r) => r.maquina_id);
+  let baseIds = baseRows.map((r) => r.maquina_id);
   if (!baseIds.length) return [];
 
-  // Atalho: equipamento específico
-  if (equipamento && baseIds.includes(equipamento)) return [equipamento];
-  if (equipamento) return [];
+  // 2) Atalho: equipamento específico
+  if (equipamento) {
+    return baseIds.includes(equipamento) ? [equipamento] : [];
+  }
 
-  // Monta filtros dinâmicos
+  // 3) Filtros simples (modelo, série, usuário)
   const where = [`m.id IN (?)`];
   const params = [baseIds];
 
@@ -81,28 +82,66 @@ async function resolveMachineIds(userEmail, q = {}) {
     params.push(usuario);
   }
 
+  // 4) Filtro de status:
+  // - "Ativo"  -> máquinas com leitura no período (from/to) em `informacoes`
+  // - "Inativo"-> máquinas SEM leitura no período
+  // - qualquer outro valor -> filtra literal por m.status
   if (status) {
     const s = String(status).trim().toLowerCase();
-    if (s === "ativo") {
-      where.push(`(
-        LOWER(TRIM(m.status)) = 'ativo'
-        OR m.status IN ('1', 1, 'true', 'True', 'TRUE')
-      )`);
-    } else if (s === "inativo") {
-      where.push(`(
-        LOWER(TRIM(m.status)) = 'inativo'
-        OR m.status IN ('0', 0, 'false', 'False', 'FALSE')
-      )`);
+
+    if (s === "ativo" || s === "inativo") {
+      // período vindo da query ou padrão (últimos 30 dias)
+      const defaultTo = new Date();
+      const defaultFrom = new Date();
+      defaultFrom.setDate(defaultFrom.getDate() - 30);
+
+      const toStr =
+        typeof q.to === "string" && q.to
+          ? q.to
+          : defaultTo.toISOString().slice(0, 10);
+      const fromStr =
+        typeof q.from === "string" && q.from
+          ? q.from
+          : defaultFrom.toISOString().slice(0, 10);
+
+      // máquinas com atividade no período
+      const [activeRows] = await pool.query(
+        `
+        SELECT DISTINCT inf.maquina_id
+          FROM informacoes inf FORCE INDEX (idx_informacoes_maquina_created)
+         WHERE inf.maquina_id IN (?)
+           AND inf.created_at >= ?
+           AND inf.created_at < DATE_ADD(?, INTERVAL 1 DAY)
+        `,
+        [baseIds, fromStr, toStr]
+      );
+      const activeSet = new Set(
+        activeRows.map((r) => r.maquina_id).filter(Boolean)
+      );
+
+      // redefine o conjunto base conforme o filtro
+      baseIds =
+        s === "ativo"
+          ? baseIds.filter((id) => activeSet.has(id))
+          : baseIds.filter((id) => !activeSet.has(id));
+
+      if (!baseIds.length) return [];
+
+      // atualiza o IN (?) principal
+      params[0] = baseIds;
     } else {
+      // fallback: status textual direto no campo m.status
       where.push(`LOWER(TRIM(m.status)) = ?`);
       params.push(s);
     }
   }
 
+  // 5) Aplica todos os filtros em `maquinas`
   const [rows] = await pool.query(
     `SELECT m.id FROM maquinas m WHERE ${where.join(" AND ")}`,
     params
   );
+
   return rows.map((r) => r.id);
 }
 
@@ -490,6 +529,194 @@ app.get("/api/series/triggers", async (req, res) => {
   }
 });
 
+/* ----------------- Séries - Instalações por Mês (Equipamentos) ----------------- */
+app.get("/api/series/installations", async (req, res) => {
+  try {
+    const userEmail = req.userEmail;
+    const { from, to } = req.query;
+
+    // período padrão: últimos 6 meses
+    const defaultTo = new Date();
+    const defaultFrom = new Date();
+    defaultFrom.setMonth(defaultFrom.getMonth() - 5);
+
+    const toStr =
+      typeof to === "string" && to ? to : defaultTo.toISOString().slice(0, 10);
+    const fromStr =
+      typeof from === "string" && from
+        ? from
+        : defaultFrom.toISOString().slice(0, 10);
+
+    const machineIds = await resolveMachineIds(userEmail, req.query);
+    if (!machineIds.length) {
+      return res.json({
+        labels: [],
+        series: [{ key: "instalacoes", values: [] }],
+        _period: { from: fromStr, to: toStr, email: userEmail },
+      });
+    }
+
+    // Busca instalações agregadas por ano-mês
+    const [rows] = await pool.query(
+      `
+      SELECT
+        DATE_FORMAT(m.data_instalacao, '%Y-%m') AS ym,
+        COUNT(*) AS instalacoes
+      FROM maquinas m
+      WHERE m.id IN (?)
+        AND m.data_instalacao IS NOT NULL
+        AND m.data_instalacao >= ?
+        AND m.data_instalacao < DATE_ADD(?, INTERVAL 1 DAY)
+      GROUP BY ym
+      ORDER BY ym
+      `,
+      [machineIds, fromStr, toStr]
+    );
+
+    // Mapa ym -> quantidade
+    const countsByYm = new Map();
+    for (const r of rows) {
+      countsByYm.set(r.ym, Number(r.instalacoes || 0));
+    }
+
+    // Gera todos os meses no range, preenchendo 0 onde não tiver instalação
+    const labels = [];
+    const values = [];
+
+    const start = new Date(
+      fromStr.slice(0, 4),
+      Number(fromStr.slice(5, 7)) - 1,
+      1
+    );
+    const end = new Date(toStr.slice(0, 4), Number(toStr.slice(5, 7)) - 1, 1);
+
+    for (let dt = new Date(start); dt <= end; dt.setMonth(dt.getMonth() + 1)) {
+      const ym = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(
+        2,
+        "0"
+      )}`;
+      const label = dt
+        .toLocaleString("pt-BR", { month: "short" })
+        .replace(".", "");
+
+      labels.push(label);
+      values.push(countsByYm.get(ym) || 0);
+    }
+
+    res.json({
+      labels,
+      series: [{ key: "instalacoes", values }],
+      _period: { from: fromStr, to: toStr, email: userEmail },
+    });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+app.get("/api/series/equipment-cumulative", async (req, res) => {
+  try {
+    const userEmail = req.userEmail;
+    const { from, to } = req.query;
+
+    // período padrão: últimos 6 meses
+    const defaultTo = new Date();
+    const defaultFrom = new Date();
+    defaultFrom.setMonth(defaultFrom.getMonth() - 5);
+
+    const toStr =
+      typeof to === "string" && to ? to : defaultTo.toISOString().slice(0, 10);
+    const fromStr =
+      typeof from === "string" && from
+        ? from
+        : defaultFrom.toISOString().slice(0, 10);
+
+    const machineIds = await resolveMachineIds(userEmail, req.query);
+    if (!machineIds.length) {
+      return res.json({
+        labels: [],
+        series: [{ key: "acumulado", values: [] }],
+        _period: { from: fromStr, to: toStr, email: userEmail },
+      });
+    }
+
+    // 1) Quantos equipamentos (filtrados) já estavam instalados ANTES do período?
+    const [[prevRow]] = await pool.query(
+      `
+      SELECT COUNT(*) AS prev
+      FROM maquinas m
+      WHERE m.id IN (?)
+        AND m.data_instalacao IS NOT NULL
+        AND m.data_instalacao < ?
+      `,
+      [machineIds, fromStr]
+    );
+    let acumulado = Number(prevRow?.prev || 0);
+
+    // 2) Instalações por mês DENTRO do período
+    const [rows] = await pool.query(
+      `
+      SELECT
+        DATE_FORMAT(m.data_instalacao, '%Y-%m') AS ym,
+        COUNT(*) AS instalacoes
+      FROM maquinas m
+      WHERE m.id IN (?)
+        AND m.data_instalacao IS NOT NULL
+        AND m.data_instalacao >= ?
+        AND m.data_instalacao < DATE_ADD(?, INTERVAL 1 DAY)
+      GROUP BY ym
+      ORDER BY ym
+      `,
+      [machineIds, fromStr, toStr]
+    );
+
+    const countsByYm = new Map();
+    for (const r of rows) {
+      countsByYm.set(r.ym, Number(r.instalacoes || 0));
+    }
+
+    // 3) Gera todos os meses do range, aplicando acumulado com base no saldo inicial
+    const labels = [];
+    const values = [];
+
+    const start = new Date(
+      Number(fromStr.slice(0, 4)),
+      Number(fromStr.slice(5, 7)) - 1,
+      1
+    );
+    const end = new Date(
+      Number(toStr.slice(0, 4)),
+      Number(toStr.slice(5, 7)) - 1,
+      1
+    );
+
+    for (let dt = new Date(start); dt <= end; dt.setMonth(dt.getMonth() + 1)) {
+      const ym = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(
+        2,
+        "0"
+      )}`;
+      const label = dt
+        .toLocaleString("pt-BR", { month: "short" })
+        .replace(".", "");
+
+      const instalacoesMes = countsByYm.get(ym) || 0;
+      acumulado += instalacoesMes;
+
+      labels.push(label);
+      values.push(acumulado);
+    }
+
+    res.json({
+      labels,
+      series: [{ key: "acumulado", values }],
+      _period: { from: fromStr, to: toStr, email: userEmail },
+    });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: String(e) });
+  }
+});
+
 /* --------------------------- Pie (modelos) --------------------------- */
 app.get("/api/models/pie", async (req, res) => {
   try {
@@ -634,6 +861,66 @@ app.get("/api/tables/water-by-equipment", async (req, res) => {
     res.status(500).json({ error: String(e) });
   }
 });
+/* -------------------- Tabela - Lista de Equipamentos -------------------- */
+app.get("/api/tables/equipment-list", async (req, res) => {
+  try {
+    const userEmail = req.userEmail;
+    const { from, to } = req.query;
+
+    const machineIds = await resolveMachineIds(userEmail, req.query);
+
+    if (!machineIds.length) {
+      return res.json({
+        columns: ["Equipamento", "Modelo", "Status", "Próx. troca filtro"],
+        rows: [],
+        total: 0,
+        _period: { from, to, email: userEmail },
+      });
+    }
+
+    const [rowsRaw] = await pool.query(
+      `
+      SELECT
+        m.nome AS equipamento,
+        t.nome AS modelo,
+        m.status,
+        m.data_instalacao
+      FROM maquinas m
+      LEFT JOIN tipos t ON m.tipo_id = t.id
+      WHERE m.id IN (?)
+      `,
+      [machineIds]
+    );
+
+    // Calcula a próxima troca e formata linhas
+    const formatted = rowsRaw.map((r) => {
+      const dataTroca = r.data_instalacao ? new Date(r.data_instalacao) : null;
+      if (dataTroca) dataTroca.setMonth(dataTroca.getMonth() + 6);
+
+      const proxTroca = dataTroca?.toISOString().slice(0, 10) ?? "Sem data";
+
+      // Normaliza o status
+      const statusFormatado =
+        r.status === 1 ||
+        r.status === "1" ||
+        r.status?.toLowerCase?.() === "ativo"
+          ? "Ativo"
+          : "Inativo";
+
+      return [r.equipamento, r.modelo, statusFormatado, proxTroca];
+    });
+
+    res.json({
+      columns: ["Equipamento", "Modelo", "Status", "Próx. troca filtro"],
+      rows: formatted,
+      total: formatted.length,
+      _period: { from, to, email: userEmail },
+    });
+  } catch (err) {
+    console.error("Erro ao listar equipamentos:", err);
+    res.status(500).json({ error: String(err) });
+  }
+});
 
 // Acionamentos x Equipamentos (DELTA diário somado) — AGORA COM FILTROS
 app.get("/api/tables/triggers-by-equipment", async (req, res) => {
@@ -765,6 +1052,78 @@ app.get("/api/kpis/equipment", async (req, res) => {
     });
   } catch (e) {
     console.error(e);
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+app.get("/api/location/kpis", async (req, res) => {
+  try {
+    const userEmail = req.userEmail;
+    const { from, to } = req.query;
+
+    // período padrão: últimos 30 dias
+    const defaultTo = new Date();
+    const defaultFrom = new Date();
+    defaultFrom.setDate(defaultFrom.getDate() - 30);
+
+    const toStr =
+      typeof to === "string" && to ? to : defaultTo.toISOString().slice(0, 10);
+    const fromStr =
+      typeof from === "string" && from
+        ? from
+        : defaultFrom.toISOString().slice(0, 10);
+
+    // aplica filtros e limita às máquinas do usuário
+    const machineIds = await resolveMachineIds(userEmail, req.query);
+
+    if (!machineIds.length) {
+      return res.json({
+        users_total: 0,
+        equipamentos_ativos: 0,
+        equipamentos_inativos: 0,
+        _period: { from: fromStr, to: toStr, email: userEmail },
+      });
+    }
+
+    // "Usuários" / "Localizações":
+    // aqui vamos considerar cidades distintas das máquinas filtradas
+    const [locRows] = await pool.query(
+      `
+      SELECT COUNT(DISTINCT m.cidade_id) AS qtd
+      FROM maquinas m
+      WHERE m.id IN (?)
+      `,
+      [machineIds]
+    );
+    const users_total = Number(locRows?.[0]?.qtd || 0);
+
+    // máquinas com atividade no período
+    const [activeRows] = await pool.query(
+      `
+      SELECT DISTINCT inf.maquina_id
+        FROM informacoes inf FORCE INDEX (idx_informacoes_maquina_created)
+       WHERE inf.maquina_id IN (?)
+         AND inf.created_at >= ?
+         AND inf.created_at < DATE_ADD(?, INTERVAL 1 DAY)
+      `,
+      [machineIds, fromStr, toStr]
+    );
+    const ativosSet = new Set(
+      (activeRows || []).map((r) => r.maquina_id).filter(Boolean)
+    );
+
+    const equipamentos_ativos = ativosSet.size;
+    const totalEquip = machineIds.length;
+    const equipamentos_inativos = Math.max(totalEquip - equipamentos_ativos, 0);
+
+    res.json({
+      users_total,
+      equipamentos_ativos,
+      equipamentos_inativos,
+      _period: { from: fromStr, to: toStr, email: userEmail },
+    });
+  } catch (e) {
+    console.error("Erro em /api/location/kpis:", e);
     res.status(500).json({ error: String(e) });
   }
 });

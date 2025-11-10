@@ -1,6 +1,13 @@
 import { useState } from "react";
 import { Card } from "@/components/ui/card";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
 import { ChevronLeft, ChevronRight, ArrowUpDown } from "lucide-react";
 import { formatNumber } from "@/lib/format";
@@ -8,36 +15,73 @@ import { formatNumber } from "@/lib/format";
 interface DataTableProps {
   title: string;
   columns: string[];
-  rows: Array<Array<string | number>>;
+  rows: Array<Array<string | number | null>>;
   total?: number;
   pageSize?: number;
 }
 
-export function DataTable({ title, columns, rows, total, pageSize = 10 }: DataTableProps) {
+export function DataTable({
+  title,
+  columns,
+  rows,
+  total,
+  pageSize = 10,
+}: DataTableProps) {
   const [page, setPage] = useState(0);
   const [sortColumn, setSortColumn] = useState<number | null>(null);
-  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
+  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
 
   const sortedRows = [...rows].sort((a, b) => {
     if (sortColumn === null) return 0;
     const aVal = a[sortColumn];
     const bVal = b[sortColumn];
-    if (typeof aVal === 'number' && typeof bVal === 'number') {
-      return sortDirection === 'asc' ? aVal - bVal : bVal - aVal;
+    if (typeof aVal === "number" && typeof bVal === "number") {
+      return sortDirection === "asc" ? aVal - bVal : bVal - aVal;
     }
     return 0;
   });
 
-  const paginatedRows = sortedRows.slice(page * pageSize, (page + 1) * pageSize);
+  const paginatedRows = sortedRows.slice(
+    page * pageSize,
+    (page + 1) * pageSize
+  );
   const totalPages = Math.ceil(rows.length / pageSize);
 
   const handleSort = (colIndex: number) => {
     if (sortColumn === colIndex) {
-      setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
+      setSortDirection(sortDirection === "asc" ? "desc" : "asc");
     } else {
       setSortColumn(colIndex);
-      setSortDirection('desc');
+      setSortDirection("desc");
     }
+  };
+
+  // === Helpers para destacar "Próx. troca filtro" ===
+  const getFilterStatusClass = (dateStr: string) => {
+    const d = new Date(dateStr);
+    if (isNaN(d.getTime())) return "bg-muted text-muted-foreground";
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    d.setHours(0, 0, 0, 0);
+
+    const diffMs = d.getTime() - today.getTime();
+    const diffDays = diffMs / (1000 * 60 * 60 * 24);
+
+    if (diffDays < 0) {
+      return "bg-red-100 text-red-700"; // vencido
+    } else if (diffDays <= 30) {
+      return "bg-yellow-100 text-yellow-700"; // vence em até 1 mês
+    } else {
+      return "bg-emerald-100 text-emerald-700"; // em dia
+    }
+  };
+
+  const isProxTrocaColumn = (index: number) => {
+    const col = (columns[index] || "").toLowerCase();
+    return (
+      col.includes("próx. troca filtro") || col.includes("prox. troca filtro")
+    );
   };
 
   return (
@@ -65,11 +109,37 @@ export function DataTable({ title, columns, rows, total, pageSize = 10 }: DataTa
           <TableBody>
             {paginatedRows.map((row, idx) => (
               <TableRow key={idx}>
-                {row.map((cell, cellIdx) => (
-                  <TableCell key={cellIdx}>
-                    {typeof cell === 'number' ? formatNumber(cell) : cell}
-                  </TableCell>
-                ))}
+                {row.map((cell, cellIdx) => {
+                  // Coluna especial: Próx. troca filtro
+                  if (isProxTrocaColumn(cellIdx)) {
+                    const text = cell ? String(cell) : "-";
+                    return (
+                      <TableCell key={cellIdx}>
+                        {cell ? (
+                          <span
+                            className={
+                              "px-2 py-1 rounded-full text-xs font-semibold " +
+                              getFilterStatusClass(text)
+                            }
+                          >
+                            {text}
+                          </span>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">
+                            -
+                          </span>
+                        )}
+                      </TableCell>
+                    );
+                  }
+
+                  // Demais colunas (padrão)
+                  return (
+                    <TableCell key={cellIdx}>
+                      {typeof cell === "number" ? formatNumber(cell) : cell}
+                    </TableCell>
+                  );
+                })}
               </TableRow>
             ))}
           </TableBody>

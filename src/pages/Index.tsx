@@ -1,5 +1,5 @@
 // src/pages/Index.tsx
-import { useState, lazy, Suspense } from "react";
+import { useState, useEffect, lazy, Suspense } from "react";
 import { subDays } from "date-fns";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
@@ -14,26 +14,21 @@ import { ModelPieChart } from "@/components/ModelPieChart";
 import { InstallationChart } from "@/components/InstallationChart";
 import { CumulativeChart } from "@/components/CumulativeChart";
 import { DataTable } from "@/components/DataTable";
-import {
-  mockTableWater,
-  mockEquipmentTable,
-  mockLocationTable,
-} from "@/lib/mockData";
-
+import { mockTableWater, mockLocationTable } from "@/lib/mockData";
+import { useInstallationsSeries } from "@/hooks/useInstallationsSeries";
+import { useCumulativeSeries } from "@/hooks/useCumulativeSeries";
 import { useKpis } from "@/hooks/useKpis";
 import { useWaterSeries, useTriggerSeries } from "@/hooks/useSeries";
 import { useModelPie } from "@/hooks/useModels";
 import { useWaterTable } from "@/hooks/useWaterTable";
 import { useFilters } from "@/hooks/useFilters";
 import { useTriggerTable } from "@/hooks/useTriggerTable";
-
 import {
   formatLiters,
   formatClicks,
   formatCO2,
   formatBottles,
 } from "@/lib/format";
-
 import type { Filters } from "@/lib/types"; // 👈 usamos o tipo centralizado
 
 interface DateRange {
@@ -74,9 +69,118 @@ const Index = () => {
   const modelPie = useModelPie(dateRange, filters);
   const waterTable = useWaterTable(dateRange, filters);
   const triggerTable = useTriggerTable(dateRange, filters);
-
+  const installations = useInstallationsSeries(dateRange, filters);
+  const cumulative = useCumulativeSeries(dateRange, filters);
   // helper: valor com fallback durante loading
   const val = (n?: number) => (kpisLoading || !kpis ? 0 : n ?? 0);
+
+  const [equipmentKpis, setEquipmentKpis] = useState({
+    total_equipamentos: 0,
+    ativos: 0,
+    inativos: 0,
+  });
+
+  const [equipmentTable, setEquipmentTable] = useState<{
+    columns: string[];
+    rows: (string | number)[][];
+    total: number;
+    loading: boolean;
+    error: string | null;
+  }>({
+    columns: [],
+    rows: [],
+    total: 0,
+    loading: false,
+    error: null,
+  });
+
+  useEffect(() => {
+    if (activeTab !== "equipment") return;
+
+    const params = new URLSearchParams();
+
+    // período
+    if (dateRange.from)
+      params.set("from", dateRange.from.toISOString().slice(0, 10));
+    if (dateRange.to) params.set("to", dateRange.to.toISOString().slice(0, 10));
+
+    // filtros
+    if (filters.usuario) params.set("usuario", String(filters.usuario));
+    if (filters.modelo) params.set("modelo", String(filters.modelo));
+    if (filters.equipamento)
+      params.set("equipamento", String(filters.equipamento));
+    if (filters.serie) params.set("serie", String(filters.serie));
+    if (filters.status) params.set("status", String(filters.status));
+
+    fetch(`/api/kpis/equipment?${params.toString()}`, {
+      headers: {
+        // enquanto não integrou auth real, fixa um usuário com dados
+        "x-user-email": "acquareduz@icehot.net.br",
+      },
+    })
+      .then((res) => res.json())
+      .then((data) => {
+        setEquipmentKpis({
+          total_equipamentos: data.total_equipamentos ?? 0,
+          ativos: data.ativos ?? 0,
+          inativos: data.inativos ?? 0,
+        });
+      })
+      .catch((err) => {
+        console.error("Erro ao carregar KPIs de equipamentos:", err);
+        setEquipmentKpis({
+          total_equipamentos: 0,
+          ativos: 0,
+          inativos: 0,
+        });
+      });
+  }, [activeTab, dateRange, filters]);
+
+  useEffect(() => {
+    if (activeTab !== "equipment") return;
+
+    setEquipmentTable((prev) => ({ ...prev, loading: true, error: null }));
+
+    const params = new URLSearchParams();
+
+    // período
+    if (dateRange.from)
+      params.set("from", dateRange.from.toISOString().slice(0, 10));
+    if (dateRange.to) params.set("to", dateRange.to.toISOString().slice(0, 10));
+
+    // filtros
+    if (filters.usuario) params.set("usuario", String(filters.usuario));
+    if (filters.modelo) params.set("modelo", String(filters.modelo));
+    if (filters.equipamento)
+      params.set("equipamento", String(filters.equipamento));
+    if (filters.serie) params.set("serie", String(filters.serie));
+    if (filters.status) params.set("status", String(filters.status));
+
+    fetch(`/api/tables/equipment-list?${params.toString()}`, {
+      headers: {
+        // temporário até ter auth real
+        "x-user-email": "acquareduz@icehot.net.br",
+      },
+    })
+      .then((res) => res.json())
+      .then((data) => {
+        setEquipmentTable({
+          columns: data.columns ?? [],
+          rows: data.rows ?? [],
+          total: data.total ?? 0,
+          loading: false,
+          error: null,
+        });
+      })
+      .catch((err) => {
+        console.error("Erro ao carregar tabela de equipamentos:", err);
+        setEquipmentTable((prev) => ({
+          ...prev,
+          loading: false,
+          error: "Erro ao carregar dados",
+        }));
+      });
+  }, [activeTab, dateRange, filters]);
 
   return (
     <div className="min-h-screen bg-background">
@@ -245,31 +349,41 @@ const Index = () => {
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <KpiCard
                 label="Total de Equipamentos"
-                value={398}
-                helpText="Total de equipamentos cadastrados"
+                value={equipmentKpis.total_equipamentos}
+                helpText="Total de equipamentos filtrados"
               />
               <KpiCard
                 label="Ativos"
-                value={365}
-                helpText="Equipamentos em operação"
+                value={equipmentKpis.ativos}
+                helpText="Equipamentos com uso no período selecionado"
               />
               <KpiCard
                 label="Inativos"
-                value={33}
-                helpText="Equipamentos desativados"
+                value={equipmentKpis.inativos}
+                helpText="Sem registros no período selecionado"
               />
             </div>
 
             <DataTable
               title="Lista de Equipamentos"
-              columns={mockEquipmentTable.columns}
-              rows={mockEquipmentTable.rows}
-              total={mockEquipmentTable.total}
+              columns={
+                equipmentTable.columns.length
+                  ? equipmentTable.columns
+                  : [
+                      "Equipamento",
+                      "Modelo",
+                      "Nº de Série",
+                      "Status",
+                      "Ativo no período?",
+                    ]
+              }
+              rows={equipmentTable.rows}
+              total={equipmentTable.total}
             />
 
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              <InstallationChart />
-              <CumulativeChart />
+              <InstallationChart data={installations.data ?? undefined} />
+              <CumulativeChart data={cumulative.data ?? undefined} />
             </div>
           </TabsContent>
 
