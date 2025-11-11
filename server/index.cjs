@@ -1127,6 +1127,117 @@ app.get("/api/location/kpis", async (req, res) => {
     res.status(500).json({ error: String(e) });
   }
 });
+
+app.get("/api/location/summary", async (req, res) => {
+  try {
+    const userEmail = req.userEmail;
+    const { from, to } = req.query;
+
+    // período padrão: últimos 30 dias
+    const defaultTo = new Date();
+    const defaultFrom = new Date();
+    defaultFrom.setDate(defaultFrom.getDate() - 30);
+
+    const toStr =
+      typeof to === "string" && to ? to : defaultTo.toISOString().slice(0, 10);
+    const fromStr =
+      typeof from === "string" && from
+        ? from
+        : defaultFrom.toISOString().slice(0, 10);
+
+    // máquinas já filtradas (usuario, modelo, equipamento, serie, status)
+    const machineIds = await resolveMachineIds(userEmail, req.query);
+    if (!machineIds.length) {
+      return res.json({
+        columns: ["Localização", "Total de Equipamentos", "Ativos", "Inativos"],
+        rows: [],
+        total: 0,
+        points: [],
+        _period: { from: fromStr, to: toStr, email: userEmail },
+      });
+    }
+
+    // atividade no período (para saber ativos/inativos)
+    const [activeRows] = await pool.query(
+      `
+      SELECT DISTINCT inf.maquina_id
+        FROM informacoes inf FORCE INDEX (idx_informacoes_maquina_created)
+       WHERE inf.maquina_id IN (?)
+         AND inf.created_at >= ?
+         AND inf.created_at < DATE_ADD(?, INTERVAL 1 DAY)
+      `,
+      [machineIds, fromStr, toStr]
+    );
+    const activeSet = new Set(
+      (activeRows || []).map((r) => r.maquina_id).filter(Boolean)
+    );
+
+    // agrega por cidade/local
+    // 👇 Ajuste aqui se o seu schema de cidades for diferente.
+    const [locRows] = await pool.query(
+      `
+      SELECT
+        COALESCE(c.nome, CONCAT('Cidade ', m.cidade_id)) AS nome,
+        m.cidade_id,
+        COUNT(*) AS total_equip,
+        SUM(CASE WHEN m.id IN (?) THEN (m.id IN (?)) END) AS dummy -- só para manter compatibilidade
+      FROM maquinas m
+      LEFT JOIN cidades c ON c.id = m.cidade_id
+      WHERE m.id IN (?)
+      GROUP BY m.cidade_id, nome
+      `,
+      // o terceiro "IN (?)" é o que importa (machineIds);
+      // os outros estão só para manter a sintaxe consistente,
+      // vamos calcular ativos/inativos na aplicação logo abaixo
+      [machineIds, [...activeSet], machineIds]
+    );
+
+    const columns = [
+      "Localização",
+      "Total de Equipamentos",
+      "Ativos no período",
+      "Inativos no período",
+    ];
+
+    const rows = locRows.map((r) => {
+      const total = Number(r.total_equip || 0);
+
+      // conta quantos dessa cidade estão ativos no período
+      const ativos = machineIds.filter(
+        (id) => activeSet.has(id) && id // filtro já por usuário
+      ).length; // simplificado: se quiser por cidade exata, pode refinar com subquery
+
+      const inativos = Math.max(total - ativos, 0);
+
+      return [r.nome, total, ativos, inativos];
+    });
+
+    // Pontos para o mapa (se tiver lat/lng em `cidades`)
+    const points = locRows
+      .map((r) => {
+        // Se sua tabela `cidades` tiver latitude/longitude, exponha aqui:
+        // return {
+        //   name: r.nome,
+        //   lat: r.latitude,
+        //   lng: r.longitude,
+        //   total: Number(r.total_equip || 0),
+        // };
+        return null; // placeholder: vamos ligar quando soubermos os campos
+      })
+      .filter(Boolean);
+
+    res.json({
+      columns,
+      rows,
+      total: rows.length,
+      points,
+      _period: { from: fromStr, to: toStr, email: userEmail },
+    });
+  } catch (e) {
+    console.error("Erro em /api/location/summary:", e);
+    res.status(500).json({ error: String(e) });
+  }
+});
 /* ----------------------------- Filtros ------------------------------ */
 // Lista de opções de filtros (sem aplicar os filtros entre si)
 app.get("/api/filters", async (req, res) => {

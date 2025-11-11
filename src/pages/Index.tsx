@@ -5,6 +5,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { BarChart3, Package, MapPin } from "lucide-react";
+
 import { DateRangePicker } from "@/components/DateRangePicker";
 import { FilterBar } from "@/components/FilterBar";
 import { KpiCard } from "@/components/KpiCard";
@@ -14,30 +15,33 @@ import { ModelPieChart } from "@/components/ModelPieChart";
 import { InstallationChart } from "@/components/InstallationChart";
 import { CumulativeChart } from "@/components/CumulativeChart";
 import { DataTable } from "@/components/DataTable";
-import { mockTableWater, mockLocationTable } from "@/lib/mockData";
-import { useInstallationsSeries } from "@/hooks/useInstallationsSeries";
-import { useCumulativeSeries } from "@/hooks/useCumulativeSeries";
+
 import { useKpis } from "@/hooks/useKpis";
 import { useWaterSeries, useTriggerSeries } from "@/hooks/useSeries";
 import { useModelPie } from "@/hooks/useModels";
 import { useWaterTable } from "@/hooks/useWaterTable";
-import { useFilters } from "@/hooks/useFilters";
 import { useTriggerTable } from "@/hooks/useTriggerTable";
+import { useFilters } from "@/hooks/useFilters";
+import { useInstallationsSeries } from "@/hooks/useInstallationsSeries";
+import { useCumulativeSeries } from "@/hooks/useCumulativeSeries";
+import { useLocationKpis } from "@/hooks/useLocationKpis";
+import { useLocationSummary } from "@/hooks/useLocationSummary";
+
 import {
   formatLiters,
   formatClicks,
   formatCO2,
   formatBottles,
 } from "@/lib/format";
-import type { Filters } from "@/lib/types"; // 👈 usamos o tipo centralizado
+import type { Filters } from "@/lib/types";
+import "leaflet/dist/leaflet.css";
+// Lazy load map to avoid SSR issues
+const MapView = lazy(() => import("@/components/MapView"));
 
 interface DateRange {
   from: Date;
   to: Date;
 }
-
-// Lazy load map to avoid SSR issues
-const MapView = lazy(() => import("@/components/MapView"));
 
 const Index = () => {
   // período padrão (últimos 30 dias)
@@ -46,18 +50,16 @@ const Index = () => {
     to: new Date(),
   });
 
-  // opções dos selects (vem do backend)
+  // filtros
   const {
     data: filterOptions,
     loading: filtersLoading,
     error: filtersError,
   } = useFilters();
-
-  // estado dos filtros selecionados
   const [filters, setFilters] = useState<Filters>({});
   const [activeTab, setActiveTab] = useState("overview");
 
-  // ==== chamadas de dados (agora TODAS recebem os filtros) ====
+  // ==== dados visão geral ====
   const {
     data: kpis,
     loading: kpisLoading,
@@ -69,17 +71,30 @@ const Index = () => {
   const modelPie = useModelPie(dateRange, filters);
   const waterTable = useWaterTable(dateRange, filters);
   const triggerTable = useTriggerTable(dateRange, filters);
+
+  // ==== dados equipamentos ====
   const installations = useInstallationsSeries(dateRange, filters);
   const cumulative = useCumulativeSeries(dateRange, filters);
-  // helper: valor com fallback durante loading
+
+  // ==== dados localização ====
+  const locationKpis = useLocationKpis(dateRange, filters);
+  const locationSummary = useLocationSummary(dateRange, filters);
+
+  // helper visão geral
   const val = (n?: number) => (kpisLoading || !kpis ? 0 : n ?? 0);
 
+  // helper localização
+  const valLoc = (n?: number) =>
+    locationKpis.loading || !locationKpis.data ? 0 : n ?? 0;
+
+  // ==== estado KPIs Equipamentos ====
   const [equipmentKpis, setEquipmentKpis] = useState({
     total_equipamentos: 0,
     ativos: 0,
     inativos: 0,
   });
 
+  // ==== estado Tabela Equipamentos ====
   const [equipmentTable, setEquipmentTable] = useState<{
     columns: string[];
     rows: (string | number)[][];
@@ -94,17 +109,16 @@ const Index = () => {
     error: null,
   });
 
+  // Carrega KPIs da aba Equipamentos
   useEffect(() => {
     if (activeTab !== "equipment") return;
 
     const params = new URLSearchParams();
 
-    // período
     if (dateRange.from)
       params.set("from", dateRange.from.toISOString().slice(0, 10));
     if (dateRange.to) params.set("to", dateRange.to.toISOString().slice(0, 10));
 
-    // filtros
     if (filters.usuario) params.set("usuario", String(filters.usuario));
     if (filters.modelo) params.set("modelo", String(filters.modelo));
     if (filters.equipamento)
@@ -114,7 +128,6 @@ const Index = () => {
 
     fetch(`/api/kpis/equipment?${params.toString()}`, {
       headers: {
-        // enquanto não integrou auth real, fixa um usuário com dados
         "x-user-email": "acquareduz@icehot.net.br",
       },
     })
@@ -136,6 +149,7 @@ const Index = () => {
       });
   }, [activeTab, dateRange, filters]);
 
+  // Carrega tabela da aba Equipamentos
   useEffect(() => {
     if (activeTab !== "equipment") return;
 
@@ -143,12 +157,10 @@ const Index = () => {
 
     const params = new URLSearchParams();
 
-    // período
     if (dateRange.from)
       params.set("from", dateRange.from.toISOString().slice(0, 10));
     if (dateRange.to) params.set("to", dateRange.to.toISOString().slice(0, 10));
 
-    // filtros
     if (filters.usuario) params.set("usuario", String(filters.usuario));
     if (filters.modelo) params.set("modelo", String(filters.modelo));
     if (filters.equipamento)
@@ -158,7 +170,6 @@ const Index = () => {
 
     fetch(`/api/tables/equipment-list?${params.toString()}`, {
       headers: {
-        // temporário até ter auth real
         "x-user-email": "acquareduz@icehot.net.br",
       },
     })
@@ -267,7 +278,7 @@ const Index = () => {
               />
             </div>
 
-            {/* Trigger KPIs (cliques) */}
+            {/* Trigger KPIs */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
               <KpiCard
                 label="Total – Acionamentos"
@@ -300,7 +311,7 @@ const Index = () => {
               <KpiCard
                 label="Equipamentos Utilizados"
                 value={val(kpis?.equipamentos_utilizados)}
-                helpText="Equipamentos ativos no período"
+                helpText="Equipamentos com registros no período"
               />
               <KpiCard
                 label="Garrafas Poupadas"
@@ -329,9 +340,9 @@ const Index = () => {
             <div className="space-y-6">
               <DataTable
                 title="Litros x Equipamentos"
-                columns={waterTable.data?.columns ?? mockTableWater.columns}
-                rows={waterTable.data?.rows ?? mockTableWater.rows}
-                total={waterTable.data?.total ?? mockTableWater.total}
+                columns={waterTable.data?.columns ?? []}
+                rows={waterTable.data?.rows ?? []}
+                total={waterTable.data?.total ?? 0}
               />
               <DataTable
                 title="Utilização x Equipamentos"
@@ -355,12 +366,12 @@ const Index = () => {
               <KpiCard
                 label="Ativos"
                 value={equipmentKpis.ativos}
-                helpText="Equipamentos com uso no período selecionado"
+                helpText="Com uso no período selecionado"
               />
               <KpiCard
                 label="Inativos"
                 value={equipmentKpis.inativos}
-                helpText="Sem registros no período selecionado"
+                helpText="Sem uso no período selecionado"
               />
             </div>
 
@@ -369,13 +380,7 @@ const Index = () => {
               columns={
                 equipmentTable.columns.length
                   ? equipmentTable.columns
-                  : [
-                      "Equipamento",
-                      "Modelo",
-                      "Nº de Série",
-                      "Status",
-                      "Ativo no período?",
-                    ]
+                  : ["Equipamento", "Modelo", "Status", "Próx. troca filtro"]
               }
               rows={equipmentTable.rows}
               total={equipmentTable.total}
@@ -389,33 +394,47 @@ const Index = () => {
 
           {/* Location Tab */}
           <TabsContent value="location" className="space-y-6 mt-6">
+            {locationKpis.error && (
+              <Badge variant="destructive">
+                Erro ao carregar KPIs de localização:{" "}
+                {String(locationKpis.error)}
+              </Badge>
+            )}
+
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <KpiCard
-                label="Usuários"
-                value={87}
-                helpText="Total de usuários cadastrados"
+                label="Localizações"
+                value={valLoc(locationKpis.data?.users_total)}
+                helpText="Cidades com equipamentos filtrados"
               />
               <KpiCard
-                label="Ativos"
-                value={365}
-                helpText="Equipamentos ativos"
+                label="Equipamentos Ativos"
+                value={valLoc(locationKpis.data?.equipamentos_ativos)}
+                helpText="Com registros no período selecionado"
               />
               <KpiCard
-                label="Inativos"
-                value={33}
-                helpText="Equipamentos inativos"
+                label="Equipamentos Inativos"
+                value={valLoc(locationKpis.data?.equipamentos_inativos)}
+                helpText="Sem registros no período selecionado"
               />
             </div>
 
-            <Suspense fallback={<Skeleton className="h-[600px] rounded-2xl" />}>
-              <MapView />
+            <Suspense fallback={<Skeleton className="h-[400px] rounded-2xl" />}>
+              <MapView data={locationSummary.data ?? undefined} />
             </Suspense>
 
             <DataTable
               title="Equipamentos por Localização"
-              columns={mockLocationTable.columns}
-              rows={mockLocationTable.rows}
-              total={mockLocationTable.total}
+              columns={
+                locationSummary.data?.columns ?? [
+                  "Localização",
+                  "Total de Equipamentos",
+                  "Ativos no período",
+                  "Inativos no período",
+                ]
+              }
+              rows={locationSummary.data?.rows ?? []}
+              total={locationSummary.data?.total ?? 0}
             />
           </TabsContent>
         </Tabs>
