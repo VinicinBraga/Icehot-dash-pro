@@ -34,7 +34,9 @@ import {
   formatBottles,
 } from "@/lib/format";
 import type { Filters } from "@/lib/types";
+import { apiFetch } from "@/lib/api";
 import "leaflet/dist/leaflet.css";
+
 // Lazy load map to avoid SSR issues
 const MapView = lazy(() => import("@/components/MapView"));
 
@@ -126,11 +128,7 @@ const Index = () => {
     if (filters.serie) params.set("serie", String(filters.serie));
     if (filters.status) params.set("status", String(filters.status));
 
-    fetch(`/api/kpis/equipment?${params.toString()}`, {
-      headers: {
-        "x-user-email": "acquareduz@icehot.net.br",
-      },
-    })
+    apiFetch(`/api/kpis/equipment?${params.toString()}`)
       .then((res) => res.json())
       .then((data) => {
         setEquipmentKpis({

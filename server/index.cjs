@@ -9,10 +9,41 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Middleware simples de "auth" por header (simula filtro por e-mail)
-app.use((req, _res, next) => {
-  req.userEmail = req.header("x-user-email") || "teste@icehot.com.br";
-  next();
+const jwt = require("jsonwebtoken");
+const bcrypt = require("bcryptjs");
+
+// Middleware de autenticação por JWT
+app.use((req, res, next) => {
+  // Libera rota de login sem exigir token
+  if (req.path === "/api/auth/login") {
+    return next();
+  }
+
+  const auth = req.header("authorization");
+  const legacyEmail = req.header("x-user-email"); // ainda aceito p/ testes
+
+  // Preferência: JWT
+  if (auth && auth.startsWith("Bearer ")) {
+    const token = auth.slice(7);
+    try {
+      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+      req.userId = decoded.id;
+      req.userEmail = decoded.email;
+      return next();
+    } catch (err) {
+      console.warn("JWT inválido:", err.message);
+      return res.status(401).json({ error: "Token inválido ou expirado" });
+    }
+  }
+
+  // Fallback temporário: x-user-email (enquanto front não usa login)
+  if (legacyEmail) {
+    req.userEmail = legacyEmail;
+    return next();
+  }
+
+  // Sem token e sem header legado => não autenticado
+  return res.status(401).json({ error: "Não autenticado" });
 });
 
 /* ------------------------- Helpers / Utils ------------------------- */
@@ -32,7 +63,16 @@ async function getUserMachineIds(email) {
   );
   return machinesRows.map((r) => r.maquina_id);
 }
+function signToken(user) {
+  const payload = {
+    id: user.id,
+    email: user.email,
+  };
 
+  return jwt.sign(payload, process.env.JWT_SECRET, {
+    expiresIn: process.env.JWT_EXPIRES_IN || "7d",
+  });
+}
 /**
  * resolveMachineIds: aplica os filtros (usuario, modelo, equipamento, serie, status)
  * e retorna apenas os IDs de máquinas pertencentes ao usuário do header.
@@ -144,6 +184,61 @@ async function resolveMachineIds(userEmail, q = {}) {
 
   return rows.map((r) => r.id);
 }
+
+/* --------------------------- Auth --------------------------- */
+
+app.post("/api/auth/login", async (req, res) => {
+  try {
+    const { email, password } = req.body || {};
+
+    if (!email || !password) {
+      return res.status(400).json({ error: "Informe email e senha." });
+    }
+
+    const [rows] = await pool.query(
+      "SELECT id, email, password FROM users WHERE email = ? LIMIT 1",
+      [email]
+    );
+
+    if (!rows.length) {
+      return res.status(401).json({ error: "Credenciais inválidas." });
+    }
+
+    const user = rows[0];
+
+    // password é hash bcrypt na base (como vimos)
+    const ok = await bcrypt.compare(password, user.password);
+
+    if (!ok) {
+      return res.status(401).json({ error: "Credenciais inválidas." });
+    }
+
+    const token = signToken(user);
+
+    return res.json({
+      token,
+      user: {
+        id: user.id,
+        email: user.email,
+      },
+    });
+  } catch (e) {
+    console.error("Erro no login:", e);
+    return res.status(500).json({ error: "Erro ao autenticar." });
+  }
+});
+
+// Opcional: validar token e obter usuário logado
+app.get("/api/auth/me", (req, res) => {
+  if (!req.userEmail) {
+    return res.status(401).json({ error: "Não autenticado" });
+  }
+
+  res.json({
+    id: req.userId || null,
+    email: req.userEmail,
+  });
+});
 
 /* --------------------------- Rotas básicas --------------------------- */
 

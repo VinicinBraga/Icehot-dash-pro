@@ -7,11 +7,10 @@ import type {
   FilterOptions,
   Filters,
 } from "./types";
+import { getToken, clearToken } from "./auth";
 
 const API_URL =
   import.meta.env.VITE_API_URL?.toString() || "http://localhost:3001";
-const DEFAULT_EMAIL =
-  import.meta.env.VITE_USER_EMAIL?.toString() || "teste@icehot.com.br";
 
 /** Adiciona filtros opcionais na URL */
 function appendFilters(url: URL, f?: Filters) {
@@ -23,7 +22,7 @@ function appendFilters(url: URL, f?: Filters) {
   if (f.status) url.searchParams.set("status", f.status);
 }
 
-/** Normaliza Date -> YYYY-MM-DD (sem timezone) */
+/** Normaliza Date -> YYYY-MM-DD */
 function toYMD(d: Date) {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, "0");
@@ -31,20 +30,80 @@ function toYMD(d: Date) {
   return `${y}-${m}-${day}`;
 }
 
+/** Helper central: faz fetch com token JWT */
+async function authFetch(url: string, options: RequestInit = {}) {
+  const token = getToken();
+
+  const headers: HeadersInit = {
+    "Content-Type": "application/json",
+    ...(options.headers || {}),
+  };
+
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
+
+  const res = await fetch(url, { ...options, headers });
+
+  // Se expirou o token → limpar e forçar login novamente
+  if (res.status === 401) {
+    clearToken();
+    window.location.reload();
+  }
+
+  return res;
+}
+
+// =======================
+// Funções de API
+// =======================
+export async function apiFetch(
+  url: string,
+  options: RequestInit = {}
+): Promise<Response> {
+  const token = getToken();
+
+  const headers: HeadersInit = {
+    ...(options.headers || {}),
+  };
+
+  // Só seta content-type se for body JSON explícito (pra não quebrar GET)
+  if (
+    options.body &&
+    !(headers["Content-Type"] || headers["content-type"])
+  ) {
+    headers["Content-Type"] = "application/json";
+  }
+
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
+
+  const res = await fetch(url, {
+    ...options,
+    headers,
+  });
+
+  if (res.status === 401) {
+    // Token inválido / expirado -> limpa e volta pro login
+    clearToken();
+    window.location.reload();
+  }
+
+  return res;
+}
+
 export async function fetchKpis(
   from: Date,
   to: Date,
-  filters?: Filters,
-  userEmail = DEFAULT_EMAIL
+  filters?: Filters
 ): Promise<KpiData> {
   const url = new URL(`${API_URL}/api/kpis`);
   url.searchParams.set("from", toYMD(from));
   url.searchParams.set("to", toYMD(to));
   appendFilters(url, filters);
 
-  const res = await fetch(url.toString(), {
-    headers: { "x-user-email": userEmail },
-  });
+  const res = await authFetch(url.toString());
   if (!res.ok) throw new Error(`Falha ao buscar KPIs (${res.status})`);
   return (await res.json()) as KpiData;
 }
@@ -52,17 +111,14 @@ export async function fetchKpis(
 export async function fetchWaterSeries(
   from: Date,
   to: Date,
-  filters?: Filters,
-  userEmail = DEFAULT_EMAIL
+  filters?: Filters
 ): Promise<SeriesData> {
   const url = new URL(`${API_URL}/api/series/water`);
   url.searchParams.set("from", toYMD(from));
   url.searchParams.set("to", toYMD(to));
   appendFilters(url, filters);
 
-  const res = await fetch(url.toString(), {
-    headers: { "x-user-email": userEmail },
-  });
+  const res = await authFetch(url.toString());
   if (!res.ok)
     throw new Error(`Falha ao buscar séries de água (${res.status})`);
   return (await res.json()) as SeriesData;
@@ -71,59 +127,46 @@ export async function fetchWaterSeries(
 export async function fetchTriggerSeries(
   from: Date,
   to: Date,
-  filters?: Filters,
-  userEmail = DEFAULT_EMAIL
+  filters?: Filters
 ): Promise<SeriesData> {
   const url = new URL(`${API_URL}/api/series/triggers`);
   url.searchParams.set("from", toYMD(from));
   url.searchParams.set("to", toYMD(to));
   appendFilters(url, filters);
 
-  const res = await fetch(url.toString(), {
-    headers: { "x-user-email": userEmail },
-  });
+  const res = await authFetch(url.toString());
   if (!res.ok)
-    throw new Error(
-      `Falha ao buscar séries de acionamentos (${res.status})`
-    );
+    throw new Error(`Falha ao buscar séries de acionamentos (${res.status})`);
   return (await res.json()) as SeriesData;
 }
 
 export async function fetchModelPie(
   from: Date,
   to: Date,
-  filters?: Filters,
-  userEmail = DEFAULT_EMAIL
+  filters?: Filters
 ): Promise<PieData[]> {
   const url = new URL(`${API_URL}/api/models/pie`);
   url.searchParams.set("from", toYMD(from));
   url.searchParams.set("to", toYMD(to));
   appendFilters(url, filters);
-  const res = await fetch(url.toString(), {
-    headers: { "x-user-email": userEmail },
-  });
-  if (!res.ok) {
-    throw new Error(
-      `Falha ao buscar distribuição de modelos (${res.status})`
-    );
-  }
+
+  const res = await authFetch(url.toString());
+  if (!res.ok)
+    throw new Error(`Falha ao buscar distribuição de modelos (${res.status})`);
   return (await res.json()) as PieData[];
 }
 
 export async function fetchWaterByEquipment(
   from: Date,
   to: Date,
-  filters?: Filters,
-  userEmail = DEFAULT_EMAIL
+  filters?: Filters
 ): Promise<TableData> {
   const url = new URL(`${API_URL}/api/tables/water-by-equipment`);
   url.searchParams.set("from", toYMD(from));
   url.searchParams.set("to", toYMD(to));
   appendFilters(url, filters);
 
-  const res = await fetch(url.toString(), {
-    headers: { "x-user-email": userEmail },
-  });
+  const res = await authFetch(url.toString());
   if (!res.ok)
     throw new Error(`Falha ao buscar tabela de água (${res.status})`);
   return (await res.json()) as TableData;
@@ -132,37 +175,26 @@ export async function fetchWaterByEquipment(
 export async function fetchTriggerTable(
   from: Date,
   to: Date,
-  filters?: Filters,
-  userEmail = DEFAULT_EMAIL
+  filters?: Filters
 ): Promise<TableData> {
   const url = new URL(`${API_URL}/api/tables/triggers-by-equipment`);
   url.searchParams.set("from", toYMD(from));
   url.searchParams.set("to", toYMD(to));
   appendFilters(url, filters);
 
-  const res = await fetch(url.toString(), {
-    headers: { "x-user-email": userEmail },
-  });
+  const res = await authFetch(url.toString());
   if (!res.ok)
-    throw new Error(
-      `Falha ao buscar tabela de acionamentos (${res.status})`
-    );
+    throw new Error(`Falha ao buscar tabela de acionamentos (${res.status})`);
   return (await res.json()) as TableData;
 }
 
-export async function fetchFilters(
-  userEmail = DEFAULT_EMAIL
-): Promise<FilterOptions> {
+export async function fetchFilters(): Promise<FilterOptions> {
   const url = new URL(`${API_URL}/api/filters`);
-  const res = await fetch(url.toString(), {
-    headers: { "x-user-email": userEmail },
-  });
+  const res = await authFetch(url.toString());
   if (!res.ok) {
     const text = await res.text().catch(() => "");
     throw new Error(
-      `Falha ao buscar filtros (${res.status}): ${
-        text || res.statusText
-      }`
+      `Falha ao buscar filtros (${res.status}): ${text || res.statusText}`
     );
   }
   return (await res.json()) as FilterOptions;
