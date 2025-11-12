@@ -4,7 +4,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { AlertCircle } from "lucide-react";
-import { setToken } from "@/lib/auth";
+import { login } from "@/lib/api";
 
 interface LoginFormProps {
   onLoginSuccess?: () => void;
@@ -22,33 +22,20 @@ export function LoginForm({ onLoginSuccess }: LoginFormProps) {
     setSubmitting(true);
 
     try {
-      const res = await fetch("/api/auth/login", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ email, password }),
-      });
+      const data = await login(email, password); // chama a API via api.ts
 
-      const data = await res.json();
-
-      if (!res.ok || !data.token) {
-        setError(data.error || "Falha ao autenticar. Verifique as credenciais.");
-        setSubmitting(false);
-        return;
-      }
-
-      setToken(data.token);
-
+      // se quiser, aqui você tem: data.token e data.user
       if (onLoginSuccess) {
         onLoginSuccess();
       } else {
-        // fallback simples: recarregar para o dashboard pegar o token
-        window.location.reload();
+        // força o app a recarregar já logado
+        window.location.href = "/";
       }
     } catch (err: any) {
       console.error("Erro no login:", err);
-      setError("Erro ao conectar ao servidor.");
+      // jsonOrThrow já joga uma mensagem decente na Error
+      setError(err?.message || "Erro ao conectar ao servidor.");
+    } finally {
       setSubmitting(false);
     }
   };
@@ -64,7 +51,8 @@ export function LoginForm({ onLoginSuccess }: LoginFormProps) {
           </div>
           <h1 className="text-2xl font-bold">Icehot Dashboard</h1>
           <p className="text-sm text-muted-foreground text-center">
-            Acesse com seu e-mail e senha cadastrados para ver os dados do seu contrato.
+            Acesse com seu e-mail e senha cadastrados para ver os dados do seu
+            contrato.
           </p>
         </div>
 
@@ -102,11 +90,7 @@ export function LoginForm({ onLoginSuccess }: LoginFormProps) {
             </div>
           )}
 
-          <Button
-            type="submit"
-            className="w-full mt-2"
-            disabled={submitting}
-          >
+          <Button type="submit" className="w-full mt-2" disabled={submitting}>
             {submitting ? "Entrando..." : "Entrar"}
           </Button>
         </form>

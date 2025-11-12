@@ -432,7 +432,7 @@ const Index = () => {
             </div>
 
             <Suspense fallback={<Skeleton className="h-[400px] rounded-2xl" />}>
-              <MapView />
+              <MapView dateRange={dateRange} filters={filters} />
             </Suspense>
 
             <DataTable

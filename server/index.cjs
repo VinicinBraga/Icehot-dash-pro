@@ -14,19 +14,40 @@ const MASTER_EMAILS = [
 ];
 /* --------------------------- CORS --------------------------- */
 // Em dev: libera geral. Em produção: ajuste os domínios.
+const ENV_ORIGINS = (process.env.ALLOWED_ORIGINS || "")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+
 const ALLOWED_ORIGINS = [
-  // produção
   "https://icehot-dash-pro.vercel.app",
-
-  // (opcional) URL pública do Cloud Run, caso queira testar direto no navegador
   "https://icehot-dash-api-750315205117.southamerica-east1.run.app",
-
-  // dev
   "http://localhost:5173",
   "http://127.0.0.1:5173",
   "http://localhost:8080",
   "http://127.0.0.1:8080",
 ];
+
+// Middleware global que já responde o preflight ANTES do auth
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  if (origin && ALLOWED_ORIGINS.includes(origin)) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+    res.setHeader("Vary", "Origin");
+  }
+  res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS");
+  res.setHeader(
+    "Access-Control-Allow-Headers",
+    "Authorization,Content-Type,X-User-Email"
+  );
+
+  if (req.method === "OPTIONS") {
+    return res.sendStatus(204);
+  }
+  next();
+});
+
+// Responder preflight sem exigir auth
 
 app.use(express.json());
 
@@ -245,16 +266,21 @@ async function resolveMachineIds(userEmail, q = {}, isMaster = false) {
   return rows.map((r) => r.id);
 }
 
+const PUBLIC_PATHS = new Set(["/api/_debug/ping", "/api/health"]);
 /* ---------------------- Middleware Auth JWT ---------------------- */
 
 app.use((req, res, next) => {
+  // preflight NUNCA exige autenticação
+  if (req.method === "OPTIONS") return res.sendStatus(204);
+  // rotas públicas
+  if (PUBLIC_PATHS.has(req.path)) return next();
+
   // login aberto
   if (req.path === "/api/auth/login") return next();
 
   const auth = req.header("authorization");
   const legacyEmail = req.header("x-user-email");
 
-  // 1) JWT moderno
   if (auth && auth.startsWith("Bearer ")) {
     const token = auth.slice(7);
     try {
@@ -269,7 +295,6 @@ app.use((req, res, next) => {
     }
   }
 
-  // 2) Fallback legado (útil p/ testes com curl)
   if (legacyEmail) {
     req.userEmail = legacyEmail;
     req.isMaster = isMasterEmail(legacyEmail);
@@ -1786,7 +1811,7 @@ app.get("/api/_debug/user-machines", async (req, res) => {
 
 /* ----------------------------- Boot ----------------------------- */
 
-const port = Number(process.env.PORT || 3001);
-app.listen(port, () => {
-  console.log(`API rodando em http://localhost:${port}`);
+const PORT = Number(process.env.PORT) || 8080;
+app.listen(PORT, () => {
+  console.log(`API rodando em http://localhost:${PORT}`);
 });

@@ -10,29 +10,12 @@ import type {
   MapPoint,
 } from "./types";
 
+import { getToken, clearToken } from "./auth"; // ← usa o token real do login
+
 /** ========= Base da API ========= **/
 const API_BASE_URL = (
   import.meta.env.VITE_API_URL?.toString() || "http://localhost:3001"
 ).replace(/\/+$/, "");
-
-/** Email de fallback (para dev/teste sem JWT) */
-const FALLBACK_EMAIL =
-  (import.meta.env.VITE_FALLBACK_EMAIL as string) ??
-  (import.meta.env.VITE_USER_EMAIL as string) ??
-  "";
-
-/** ========= Token helpers (no próprio arquivo) ========= **/
-const TOKEN_KEY = "auth_token";
-
-export function setToken(token: string) {
-  localStorage.setItem(TOKEN_KEY, token);
-}
-export function getToken(): string | null {
-  return localStorage.getItem(TOKEN_KEY);
-}
-export function clearToken() {
-  localStorage.removeItem(TOKEN_KEY);
-}
 
 /** ========= Utils ========= **/
 function toYMD(d: Date) {
@@ -62,7 +45,7 @@ function buildUrl(pathOrUrl: string): string {
   return `${API_BASE_URL}${pathOrUrl}`;
 }
 
-/** ========= Fetch central com JWT + fallback x-user-email ========= **/
+/** ========= Fetch central com JWT ========= **/
 export async function apiFetch(
   pathOrUrl: string,
   options: RequestInit = {}
@@ -73,7 +56,7 @@ export async function apiFetch(
     ...(options.headers || {}),
   };
 
-  // Define Content-Type se tiver body e ainda não tiver sido definido
+  // Define Content-Type se tiver body e ainda não estiver definido
   if (
     options.body &&
     !(headers["Content-Type"] || (headers as any)["content-type"])
@@ -81,11 +64,9 @@ export async function apiFetch(
     headers["Content-Type"] = "application/json";
   }
 
+  // 🔑 Agora só envia Authorization (nunca mais X-User-Email)
   if (token) {
     (headers as any)["Authorization"] = `Bearer ${token}`;
-  } else if (FALLBACK_EMAIL) {
-    // fallback de compatibilidade (útil enquanto a tela de login não salva o token)
-    (headers as any)["x-user-email"] = FALLBACK_EMAIL.replace(/^['"]|['"]$/g, "");
   }
 
   const res = await fetch(buildUrl(pathOrUrl), {
@@ -95,10 +76,11 @@ export async function apiFetch(
   });
 
   if (res.status === 401) {
-    // Token inválido/expirado → limpa e volta pro login
     clearToken();
-    // evita loop infinito em rotas públicas
-    if (!location.pathname.startsWith("/login")) {
+    if (
+      typeof window !== "undefined" &&
+      !location.pathname.startsWith("/login")
+    ) {
       window.location.href = "/";
     }
   }
@@ -114,6 +96,8 @@ async function jsonOrThrow<T>(res: Response, label: string): Promise<T> {
   }
   return (await res.json()) as T;
 }
+
+
 
 /** ========= ENDPOINTS ESPECÍFICOS ========= **/
 
@@ -282,10 +266,17 @@ export async function login(email: string, password: string) {
     method: "POST",
     body: JSON.stringify({ email, password }),
   });
+
   const data = await jsonOrThrow<LoginResponse>(res, "Falha no login");
-  setToken(data.token);
-  return data.user;
+
+  // 🔑 SALVAR TOKEN AQUI
+  if (data.token) {
+    localStorage.setItem("icehot_auth_token", data.token);
+  }
+
+  return data;
 }
+
 
 export function logout() {
   clearToken();
