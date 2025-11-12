@@ -36,6 +36,9 @@ import {
 import type { Filters } from "@/lib/types";
 import { apiFetch } from "@/lib/api";
 import "leaflet/dist/leaflet.css";
+import { clearToken } from "@/lib/auth";
+import { LogOut } from "lucide-react";
+import { Button } from "@/components/ui/button";
 
 // Lazy load map to avoid SSR issues
 const MapView = lazy(() => import("@/components/MapView"));
@@ -166,11 +169,7 @@ const Index = () => {
     if (filters.serie) params.set("serie", String(filters.serie));
     if (filters.status) params.set("status", String(filters.status));
 
-    fetch(`/api/tables/equipment-list?${params.toString()}`, {
-      headers: {
-        "x-user-email": "acquareduz@icehot.net.br",
-      },
-    })
+    apiFetch(`/api/tables/equipment-list?${params.toString()}`)
       .then((res) => res.json())
       .then((data) => {
         setEquipmentTable({
@@ -204,7 +203,22 @@ const Index = () => {
             </div>
             <h1 className="text-2xl font-bold">Icehot Dashboard</h1>
           </div>
-          <DateRangePicker value={dateRange} onChange={setDateRange} />
+          <div className="flex items-center gap-3">
+            <DateRangePicker value={dateRange} onChange={setDateRange} />
+
+            <Button
+              variant="outline"
+              size="sm"
+              className="flex items-center gap-2"
+              onClick={() => {
+                clearToken();
+                window.location.href = "/"; // volta pra tela de login
+              }}
+            >
+              <LogOut className="h-4 w-4" />
+              Logout
+            </Button>
+          </div>
         </div>
       </header>
 
@@ -418,7 +432,7 @@ const Index = () => {
             </div>
 
             <Suspense fallback={<Skeleton className="h-[400px] rounded-2xl" />}>
-              <MapView data={locationSummary.data ?? undefined} />
+              <MapView />
             </Suspense>
 
             <DataTable
@@ -429,6 +443,7 @@ const Index = () => {
                   "Total de Equipamentos",
                   "Ativos no período",
                   "Inativos no período",
+                  "Litros no período",
                 ]
               }
               rows={locationSummary.data?.rows ?? []}

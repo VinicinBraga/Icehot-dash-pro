@@ -56,65 +56,65 @@ export interface FilterOptions {
 
 export const mockKpis: KpiData = {
   water: {
-    total: 289020000,
-    fria: 124740000,
-    quente: 5440000,
-    pets: 158840000,
+    total: 0,
+    fria: 0,
+    quente: 0,
+    pets: 0,
   },
   triggers: {
-    total: 6000000000,
-    fria: 5000000000,
-    quente: 193000000,
-    pets: 621000000,
-    aspersor: 520000000,
+    total: 0,
+    fria: 0,
+    quente: 0,
+    pets: 0,
+    aspersor: 0,
   },
-  equipamentos_utilizados: 398,
-  garrafas_poupadas: 578000000,
-  co2_poupado_m3: 14700000,
+  equipamentos_utilizados: 0,
+  garrafas_poupadas: 0,
+  co2_poupado_m3: 0,
 };
 
 export const mockWaterSeries: SeriesData = {
   labels: ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun'],
   series: [
-    { key: 'total', values: [48000000, 52000000, 45000000, 49000000, 47000000, 48000000] },
-    { key: 'fria', values: [21000000, 22000000, 19000000, 21000000, 20000000, 21000000] },
-    { key: 'quente', values: [900000, 950000, 850000, 920000, 880000, 940000] },
-    { key: 'pets', values: [26000000, 29000000, 25000000, 27000000, 26000000, 26000000] },
+    { key: 'total', values: [0] },
+    { key: 'fria', values: [0]  },
+    { key: 'quente', values: [0] },
+    { key: 'pets', values: [0]  },
   ],
 };
 
 export const mockTriggerSeries: SeriesData = {
   labels: ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun'],
   series: [
-    { key: 'total', values: [1000000000, 1050000000, 980000000, 1020000000, 990000000, 960000000] },
-    { key: 'fria', values: [830000000, 870000000, 815000000, 850000000, 825000000, 810000000] },
-    { key: 'quente', values: [32000000, 33000000, 31000000, 33000000, 32000000, 32000000] },
-    { key: 'pets', values: [103000000, 106000000, 100000000, 104000000, 101000000, 102000000] },
-    { key: 'aspersor', values: [35000000, 41000000, 34000000, 33000000, 32000000, 16000000] },
+    { key: 'total', values: [0] },
+    { key: 'fria', values: [0] },
+    { key: 'quente', values: [0] },
+    { key: 'pets', values: [0] },
+    { key: 'aspersor', values: [0] },
   ],
 };
 
 export const mockPieData: PieData[] = [
-  { label: 'Slim', value: 245 },
-  { label: 'Pro', value: 153 },
+  { label: '1', value: 0 },
+  { label: '2', value: 0 },
 ];
 
 export const mockTableWater: TableData = {
   columns: ['Equipamento', 'Litros'],
   rows: [
-    ['Parque Central | EQP-21', 117225069.8],
-    ['Shopping Norte | EQP-45', 98450123.5],
-    ['Av. Principal | EQP-12', 73815642.2],
+    ['1', 0],
+    ['2', 0],
+    ['3', 0],
   ],
-  total: 398,
+  total: 0,
 };
 
 export const mockTableUsage: TableData = {
   columns: ['Equipamento', 'Acionamentos'],
   rows: [
-    ['Parque Central | EQP-21', 428823984],
-    ['Shopping Norte | EQP-45', 385612450],
-    ['Av. Principal | EQP-12', 297451203],
+    ['1', 0],
+    ['2', 0],
+    ['3', 0],
   ],
   total: 398,
 };
@@ -122,9 +122,7 @@ export const mockTableUsage: TableData = {
 export const mockEquipmentTable: TableData = {
   columns: ['#', 'Equipamento', 'Usuário', 'Nº de Série', 'Localização', 'Status', 'Troca de Filtro', 'Previsão'],
   rows: [
-    [1, 'EQP-21', 'Maria Silva', 'SN-1234', 'Florianópolis - SC', 'Ativo', '45 dias', 'Em Dia'],
-    [2, 'EQP-45', 'João Santos', 'SN-5678', 'São Paulo - SP', 'Ativo', '12 dias', 'Em Dia'],
-    [3, 'EQP-12', 'Ana Costa', 'SN-9012', 'Rio de Janeiro - RJ', 'Inativo', '120 dias', 'Atraso'],
+    [1, 'Carregando...', 'Carregando...', 'Carregando...', 'Carregando...', 'Carregando...', 'Carregando...', 'Carregando...'],
   ],
   total: 398,
 };

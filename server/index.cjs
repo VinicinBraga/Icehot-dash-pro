@@ -1,59 +1,70 @@
-// server/index.cjs
 const express = require("express");
 const cors = require("cors");
 const path = require("path");
-require("dotenv").config({ path: __dirname + "/.env" });
-const { pool } = require("./db.cjs"); // ✅ pool vem antes dos helpers
-
-const app = express();
-app.use(cors());
-app.use(express.json());
-
+require("dotenv").config({ path: path.join(__dirname, ".env") });
+const { pool } = require("./db.cjs");
 const jwt = require("jsonwebtoken");
 const bcrypt = require("bcryptjs");
+const app = express();
+const fetch = require("node-fetch");
 
-// Middleware de autenticação por JWT
-app.use((req, res, next) => {
-  // Libera rota de login sem exigir token
-  if (req.path === "/api/auth/login") {
-    return next();
-  }
+const MASTER_EMAILS = [
+  "contato@icehot.net.br",
+  "contato@devontecnologia.com.br",
+];
+/* --------------------------- CORS --------------------------- */
+// Em dev: libera geral. Em produção: ajuste os domínios.
+app.use(
+  cors({
+    origin: [
+      "http://localhost:8080",
+      "http://localhost:5173",
+      "http://127.0.0.1:8080",
+      "http://127.0.0.1:5173",
+      // coloque aqui depois: "https://seu-dash-na-vercel.vercel.app",
+      // "https://dashboard.seudominio.com.br",
+      "*",
+    ],
+    credentials: false,
+  })
+);
 
-  const auth = req.header("authorization");
-  const legacyEmail = req.header("x-user-email"); // ainda aceito p/ testes
+app.use(express.json());
 
-  // Preferência: JWT
-  if (auth && auth.startsWith("Bearer ")) {
-    const token = auth.slice(7);
-    try {
-      const decoded = jwt.verify(token, process.env.JWT_SECRET);
-      req.userId = decoded.id;
-      req.userEmail = decoded.email;
-      return next();
-    } catch (err) {
-      console.warn("JWT inválido:", err.message);
-      return res.status(401).json({ error: "Token inválido ou expirado" });
-    }
-  }
+/* --------------------- Config / Helpers --------------------- */
 
-  // Fallback temporário: x-user-email (enquanto front não usa login)
-  if (legacyEmail) {
-    req.userEmail = legacyEmail;
-    return next();
-  }
-
-  // Sem token e sem header legado => não autenticado
-  return res.status(401).json({ error: "Não autenticado" });
-});
-
-/* ------------------------- Helpers / Utils ------------------------- */
 const LITERS_SCALE = 0.001;
-// Converte string "123" -> number 123 ou undefined
+const BOTTLE_LITERS = 0.5;
+const CO2_PER_LITER_M3 = 0.00003;
+
 const asNum = (v) =>
   v === undefined || v === null || v === "" ? undefined : Number(v);
 
-// Utilitário: lista máquinas do usuário (sem filtros)
-async function getUserMachineIds(email) {
+const isMasterEmail = (email) =>
+  !!email && MASTER_EMAILS.includes(String(email).trim().toLowerCase());
+
+function signToken(user) {
+  const isMaster = isMasterEmail(user.email);
+  const payload = {
+    id: user.id,
+    email: user.email,
+    isMaster,
+  };
+
+  return jwt.sign(payload, process.env.JWT_SECRET, {
+    expiresIn: process.env.JWT_EXPIRES_IN || "7d",
+  });
+}
+
+// máquinas do usuário (ou todas, se master)
+async function getUserMachineIds(email, isMaster = false) {
+  if (!email) return [];
+
+  if (isMaster) {
+    const [rows] = await pool.query(`SELECT id FROM maquinas`);
+    return rows.map((r) => r.id);
+  }
+
   const [machinesRows] = await pool.query(
     `SELECT ue.maquina_id
        FROM users u
@@ -63,44 +74,103 @@ async function getUserMachineIds(email) {
   );
   return machinesRows.map((r) => r.maquina_id);
 }
-function signToken(user) {
-  const payload = {
-    id: user.id,
-    email: user.email,
+// ===== Helper: pega coordenadas reais da cidade e guarda cache no MySQL =====
+const removeDiacritics = (s = "") =>
+  s.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+
+function normalizeCityUf(cidadeRaw, ufRaw) {
+  const cidade = String(cidadeRaw || "").trim();
+  const uf = String(ufRaw || "")
+    .trim()
+    .toUpperCase();
+
+  // chave sem acento e sem múltiplos espaços
+  const cidadeSlim = removeDiacritics(cidade).replace(/\s+/g, " ");
+  return {
+    cidade, // mantém original p/ exibir
+    uf, // UF em maiúsculo
+    keyCidade: cidadeSlim.toLowerCase(), // p/ comparar/buscar
   };
-
-  return jwt.sign(payload, process.env.JWT_SECRET, {
-    expiresIn: process.env.JWT_EXPIRES_IN || "7d",
-  });
 }
-/**
- * resolveMachineIds: aplica os filtros (usuario, modelo, equipamento, serie, status)
- * e retorna apenas os IDs de máquinas pertencentes ao usuário do header.
- */
-async function resolveMachineIds(userEmail, q = {}) {
-  const usuario = asNum(q.usuario); // users.id (opcional)
-  const modelo = asNum(q.modelo); // tipos.id
-  const equipamento = asNum(q.equipamento); // maquinas.id
-  const serie = q.serie?.trim();
-  const status = q.status?.trim(); // "Ativo" | "Inativo" | outros
 
-  // 1) Base: máquinas vinculadas ao usuário do header
-  const [baseRows] = await pool.query(
-    `SELECT ue.maquina_id
-       FROM users u
-       JOIN usuarios_equipamentos ue ON ue.usuario_id = u.id
-      WHERE u.email = ?`,
-    [userEmail]
+async function getCityCoords(pool, cidadeRaw, ufRaw) {
+  const { cidade, uf, keyCidade } = normalizeCityUf(cidadeRaw, ufRaw);
+
+  // sem cidade/UF → sem coordenada (deixa null para não “forçar” centro do BR)
+  if (!cidade || !uf) {
+    return { lat: null, lng: null, source: "missing" };
+  }
+
+  // 1) cache exato
+  const [hit1] = await pool.query(
+    "SELECT lat, lng FROM city_coords WHERE cidade = ? AND uf = ? LIMIT 1",
+    [cidade, uf]
   );
-  let baseIds = baseRows.map((r) => r.maquina_id);
+  if (hit1.length) {
+    return {
+      lat: Number(hit1[0].lat),
+      lng: Number(hit1[0].lng),
+      source: "cache",
+    };
+  }
+
+  // 2) cache “normalizado” (sem acentos / minúsculas)
+  const [hit2] = await pool.query(
+    `SELECT lat, lng
+       FROM city_coords
+      WHERE LOWER(REPLACE(CONVERT(cidade USING ascii), '  ', ' ')) = ?
+        AND uf = ?
+      LIMIT 1`,
+    [keyCidade, uf]
+  );
+  if (hit2.length) {
+    return {
+      lat: Number(hit2[0].lat),
+      lng: Number(hit2[0].lng),
+      source: "cache-slim",
+    };
+  }
+
+  // 3) não chama Nominatim aqui; deixa faltando para semear depois
+  return { lat: null, lng: null, source: "missing" };
+}
+
+/**
+ * resolveMachineIds:
+ * - baseia-se nas máquinas vinculadas ao usuário
+ * - se isMaster => começa com TODAS as máquinas
+ * - aplica filtros: usuario, modelo, equipamento, serie, status
+ */
+async function resolveMachineIds(userEmail, q = {}, isMaster = false) {
+  const usuario = asNum(q.usuario);
+  const modelo = asNum(q.modelo);
+  const equipamento = asNum(q.equipamento);
+  const serie = q.serie?.trim();
+  const status = q.status?.trim();
+
+  let baseIds = [];
+
+  if (isMaster) {
+    const [rows] = await pool.query(`SELECT id FROM maquinas`);
+    baseIds = rows.map((r) => r.id);
+  } else {
+    const [baseRows] = await pool.query(
+      `SELECT ue.maquina_id
+         FROM users u
+         JOIN usuarios_equipamentos ue ON ue.usuario_id = u.id
+        WHERE u.email = ?`,
+      [userEmail]
+    );
+    baseIds = baseRows.map((r) => r.maquina_id);
+  }
+
   if (!baseIds.length) return [];
 
-  // 2) Atalho: equipamento específico
+  // atalho: equipamento específico
   if (equipamento) {
     return baseIds.includes(equipamento) ? [equipamento] : [];
   }
 
-  // 3) Filtros simples (modelo, série, usuário)
   const where = [`m.id IN (?)`];
   const params = [baseIds];
 
@@ -115,6 +185,7 @@ async function resolveMachineIds(userEmail, q = {}) {
   }
 
   if (usuario) {
+    // mantém: filtra por relação com usuarios_equipamentos
     where.push(`EXISTS (
       SELECT 1 FROM usuarios_equipamentos ue
       WHERE ue.usuario_id = ? AND ue.maquina_id = m.id
@@ -122,15 +193,11 @@ async function resolveMachineIds(userEmail, q = {}) {
     params.push(usuario);
   }
 
-  // 4) Filtro de status:
-  // - "Ativo"  -> máquinas com leitura no período (from/to) em `informacoes`
-  // - "Inativo"-> máquinas SEM leitura no período
-  // - qualquer outro valor -> filtra literal por m.status
+  // status especial Ativo/Inativo baseado em leituras
   if (status) {
     const s = String(status).trim().toLowerCase();
 
     if (s === "ativo" || s === "inativo") {
-      // período vindo da query ou padrão (últimos 30 dias)
       const defaultTo = new Date();
       const defaultFrom = new Date();
       defaultFrom.setDate(defaultFrom.getDate() - 30);
@@ -144,7 +211,6 @@ async function resolveMachineIds(userEmail, q = {}) {
           ? q.from
           : defaultFrom.toISOString().slice(0, 10);
 
-      // máquinas com atividade no período
       const [activeRows] = await pool.query(
         `
         SELECT DISTINCT inf.maquina_id
@@ -159,38 +225,66 @@ async function resolveMachineIds(userEmail, q = {}) {
         activeRows.map((r) => r.maquina_id).filter(Boolean)
       );
 
-      // redefine o conjunto base conforme o filtro
       baseIds =
         s === "ativo"
           ? baseIds.filter((id) => activeSet.has(id))
           : baseIds.filter((id) => !activeSet.has(id));
 
       if (!baseIds.length) return [];
-
-      // atualiza o IN (?) principal
       params[0] = baseIds;
     } else {
-      // fallback: status textual direto no campo m.status
+      // status textual do campo m.status
       where.push(`LOWER(TRIM(m.status)) = ?`);
       params.push(s);
     }
   }
 
-  // 5) Aplica todos os filtros em `maquinas`
   const [rows] = await pool.query(
     `SELECT m.id FROM maquinas m WHERE ${where.join(" AND ")}`,
     params
   );
-
   return rows.map((r) => r.id);
 }
+
+/* ---------------------- Middleware Auth JWT ---------------------- */
+
+app.use((req, res, next) => {
+  // login aberto
+  if (req.path === "/api/auth/login") return next();
+
+  const auth = req.header("authorization");
+  const legacyEmail = req.header("x-user-email");
+
+  // 1) JWT moderno
+  if (auth && auth.startsWith("Bearer ")) {
+    const token = auth.slice(7);
+    try {
+      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+      req.userId = decoded.id;
+      req.userEmail = decoded.email;
+      req.isMaster = !!decoded.isMaster || isMasterEmail(decoded.email);
+      return next();
+    } catch (err) {
+      console.warn("JWT inválido:", err.message);
+      return res.status(401).json({ error: "Token inválido ou expirado" });
+    }
+  }
+
+  // 2) Fallback legado (útil p/ testes com curl)
+  if (legacyEmail) {
+    req.userEmail = legacyEmail;
+    req.isMaster = isMasterEmail(legacyEmail);
+    return next();
+  }
+
+  return res.status(401).json({ error: "Não autenticado" });
+});
 
 /* --------------------------- Auth --------------------------- */
 
 app.post("/api/auth/login", async (req, res) => {
   try {
     const { email, password } = req.body || {};
-
     if (!email || !password) {
       return res.status(400).json({ error: "Informe email e senha." });
     }
@@ -199,27 +293,25 @@ app.post("/api/auth/login", async (req, res) => {
       "SELECT id, email, password FROM users WHERE email = ? LIMIT 1",
       [email]
     );
-
     if (!rows.length) {
       return res.status(401).json({ error: "Credenciais inválidas." });
     }
 
     const user = rows[0];
-
-    // password é hash bcrypt na base (como vimos)
     const ok = await bcrypt.compare(password, user.password);
-
     if (!ok) {
       return res.status(401).json({ error: "Credenciais inválidas." });
     }
 
     const token = signToken(user);
+    const isMaster = isMasterEmail(user.email);
 
     return res.json({
       token,
       user: {
         id: user.id,
         email: user.email,
+        isMaster,
       },
     });
   } catch (e) {
@@ -228,7 +320,6 @@ app.post("/api/auth/login", async (req, res) => {
   }
 });
 
-// Opcional: validar token e obter usuário logado
 app.get("/api/auth/me", (req, res) => {
   if (!req.userEmail) {
     return res.status(401).json({ error: "Não autenticado" });
@@ -237,12 +328,12 @@ app.get("/api/auth/me", (req, res) => {
   res.json({
     id: req.userId || null,
     email: req.userEmail,
+    isMaster: !!req.isMaster,
   });
 });
 
-/* --------------------------- Rotas básicas --------------------------- */
+/* ----------------------- Rotas utilitárias ----------------------- */
 
-// ping rápido
 app.get("/api/_debug/ping", (_req, res) => {
   res.json({
     ok: true,
@@ -254,29 +345,24 @@ app.get("/api/_debug/ping", (_req, res) => {
 app.get("/api/health", async (req, res) => {
   try {
     const [rows] = await pool.query("SELECT 1 AS ok");
-    res.json({ status: "ok", db: rows[0].ok, userEmail: req.userEmail });
+    res.json({
+      status: "ok",
+      db: rows[0].ok,
+      userEmail: req.userEmail || null,
+      isMaster: !!req.isMaster,
+    });
   } catch (e) {
     res.status(500).json({ status: "error", error: String(e) });
   }
 });
 
-app.get("/api/show-tables", async (_req, res) => {
-  try {
-    const [rows] = await pool.query("SHOW TABLES;");
-    res.json({ tables: rows });
-  } catch (e) {
-    res.status(500).json({ error: String(e) });
-  }
-});
+/* ----------------------------- KPIs ----------------------------- */
 
-/* ----------------------------- KPIs --------------------------------- */
-// KPIs (usando DELTA diário MAX−MIN por máquina) — AGORA COM FILTROS
 app.get("/api/kpis", async (req, res) => {
   try {
     const userEmail = req.userEmail;
-    const { from, to } = req.query; // YYYY-MM-DD
+    const { from, to } = req.query;
 
-    // datas padrão (últimos 30 dias)
     const defaultTo = new Date();
     const defaultFrom = new Date();
     defaultFrom.setDate(defaultFrom.getDate() - 30);
@@ -284,17 +370,25 @@ app.get("/api/kpis", async (req, res) => {
     const toStr = to || defaultTo.toISOString().slice(0, 10);
     const fromStr = from || defaultFrom.toISOString().slice(0, 10);
 
-    // intervalo semiaberto [from, to+1)
     const toPlus1 = new Date(toStr);
     toPlus1.setDate(toPlus1.getDate() + 1);
     const toPlus1Str = toPlus1.toISOString().slice(0, 10);
 
-    // ✅ máquinas levando em conta FILTROS
-    const machineIds = await resolveMachineIds(userEmail, req.query);
+    const machineIds = await resolveMachineIds(
+      userEmail,
+      req.query,
+      req.isMaster
+    );
     if (!machineIds.length) {
       return res.json({
         water: { total: 0, fria: 0, quente: 0, pets: 0 },
-        triggers: { total: 0, fria: 0, quente: 0, pets: 0, aspersor: 0 },
+        triggers: {
+          total: 0,
+          fria: 0,
+          quente: 0,
+          pets: 0,
+          aspersor: 0,
+        },
         equipamentos_utilizados: 0,
         garrafas_poupadas: 0,
         co2_poupado_m3: 0,
@@ -302,48 +396,37 @@ app.get("/api/kpis", async (req, res) => {
       });
     }
 
-    // DELTA diário por máquina (MAX−MIN) e somado no Node
     const perMachineDeltaSql = `
       SELECT
         DATE(inf.created_at) AS d,
-
-        -- LITROS (delta do dia)
         GREATEST(
           (MAX(COALESCE(NULLIF(inf.vazao_agua_fria,   ''), '0') + 0) -
            MIN(COALESCE(NULLIF(inf.vazao_agua_fria,   ''), '0') + 0)), 0
         ) AS water_fria_delta,
-
         GREATEST(
           (MAX(COALESCE(NULLIF(inf.vazao_agua_quente, ''), '0') + 0) -
            MIN(COALESCE(NULLIF(inf.vazao_agua_quente, ''), '0') + 0)), 0
         ) AS water_quente_delta,
-
         GREATEST(
           (MAX(COALESCE(NULLIF(inf.vazao_agua_pet,    ''), '0') + 0) -
            MIN(COALESCE(NULLIF(inf.vazao_agua_pet,    ''), '0') + 0)), 0
         ) AS water_pets_delta,
-
-        -- CLICKS (delta do dia)
         GREATEST(
           (MAX(COALESCE(NULLIF(inf.contador_acionamentos_agua_fria,   ''), '0') + 0) -
            MIN(COALESCE(NULLIF(inf.contador_acionamentos_agua_fria,   ''), '0') + 0)), 0
         ) AS trg_fria_delta,
-
         GREATEST(
           (MAX(COALESCE(NULLIF(inf.contador_acionamentos_agua_quente, ''), '0') + 0) -
            MIN(COALESCE(NULLIF(inf.contador_acionamentos_agua_quente, ''), '0') + 0)), 0
         ) AS trg_quente_delta,
-
         GREATEST(
           (MAX(COALESCE(NULLIF(inf.contador_acionamentos_agua_pet,    ''), '0') + 0) -
            MIN(COALESCE(NULLIF(inf.contador_acionamentos_agua_pet,    ''), '0') + 0)), 0
         ) AS trg_pets_delta,
-
         GREATEST(
           (MAX(COALESCE(NULLIF(inf.contador_acionamentos_aspersor,    ''), '0') + 0) -
            MIN(COALESCE(NULLIF(inf.contador_acionamentos_aspersor,    ''), '0') + 0)), 0
         ) AS trg_aspersor_delta
-
       FROM informacoes inf FORCE INDEX (idx_informacoes_maquina_created)
       WHERE inf.maquina_id = ?
         AND inf.created_at >= ?
@@ -361,33 +444,29 @@ app.get("/api/kpis", async (req, res) => {
       sum_trg_pets = 0,
       sum_trg_aspersor = 0;
 
-    const promises = machineIds.map(async (mid) => {
-      const [rows] = await pool.query(perMachineDeltaSql, [
-        mid,
-        fromStr,
-        toPlus1Str,
-      ]);
-      for (const r of rows) {
-        // aplica escala para litros
-        sum_fria += nz(r.water_fria_delta) * LITERS_SCALE;
-        sum_quente += nz(r.water_quente_delta) * LITERS_SCALE;
-        sum_pets += nz(r.water_pets_delta) * LITERS_SCALE;
+    await Promise.all(
+      machineIds.map(async (mid) => {
+        const [rows] = await pool.query(perMachineDeltaSql, [
+          mid,
+          fromStr,
+          toPlus1Str,
+        ]);
+        for (const r of rows) {
+          sum_fria += nz(r.water_fria_delta) * LITERS_SCALE;
+          sum_quente += nz(r.water_quente_delta) * LITERS_SCALE;
+          sum_pets += nz(r.water_pets_delta) * LITERS_SCALE;
 
-        // acionamentos permanecem sem escala
-        sum_trg_fria += nz(r.trg_fria_delta);
-        sum_trg_quente += nz(r.trg_quente_delta);
-        sum_trg_pets += nz(r.trg_pets_delta);
-        sum_trg_aspersor += nz(r.trg_aspersor_delta);
-      }
-    });
-    await Promise.all(promises);
+          sum_trg_fria += nz(r.trg_fria_delta);
+          sum_trg_quente += nz(r.trg_quente_delta);
+          sum_trg_pets += nz(r.trg_pets_delta);
+          sum_trg_aspersor += nz(r.trg_aspersor_delta);
+        }
+      })
+    );
 
     const water_total = sum_fria + sum_quente + sum_pets;
     const trg_total =
       sum_trg_fria + sum_trg_quente + sum_trg_pets + sum_trg_aspersor;
-
-    const BOTTLE_LITERS = 0.5;
-    const CO2_PER_LITER_M3 = 0.00003;
 
     const equipamentos_utilizados = machineIds.length;
     const garrafas_poupadas = water_total / BOTTLE_LITERS;
@@ -418,8 +497,151 @@ app.get("/api/kpis", async (req, res) => {
   }
 });
 
-/* ------------------------- Séries (Água) ---------------------------- */
-// delta diário → agregado por mês — AGORA COM FILTROS
+// ===== Localização (mapa - por equipamento, alinhado com KPIs) =====
+app.get("/api/localizacao", async (req, res) => {
+  try {
+    const userEmail = req.userEmail || req.header("x-user-email");
+    const { from, to } = req.query;
+
+    if (!userEmail && !req.isMaster) {
+      return res.status(401).json({ error: "Não autenticado" });
+    }
+
+    // intervalo padrão: últimos 30 dias
+    const defaultTo = new Date();
+    const defaultFrom = new Date();
+    defaultFrom.setDate(defaultFrom.getDate() - 30);
+
+    const toStr =
+      typeof to === "string" && to ? to : defaultTo.toISOString().slice(0, 10);
+    const fromStr =
+      typeof from === "string" && from
+        ? from
+        : defaultFrom.toISOString().slice(0, 10);
+
+    // [from, to+1)
+    const toPlus1 = new Date(toStr);
+    toPlus1.setDate(toPlus1.getDate() + 1);
+    const toPlus1Str = toPlus1.toISOString().slice(0, 10);
+
+    // máquinas visíveis (usuário normal ou master, com filtros)
+    const machineIds = await resolveMachineIds(
+      userEmail,
+      req.query,
+      req.isMaster
+    );
+
+    if (!machineIds.length) {
+      return res.json({
+        points: [],
+        _period: { from: fromStr, to: toStr, email: userEmail || null },
+      });
+    }
+
+    // 1) calcula litros por máquina usando a MESMA lógica do /api/kpis
+    const perMachineDeltaSql = `
+      SELECT
+        DATE(inf.created_at) AS d,
+        GREATEST(
+          (MAX(COALESCE(NULLIF(inf.vazao_agua_fria,   ''), '0') + 0) -
+           MIN(COALESCE(NULLIF(inf.vazao_agua_fria,   ''), '0') + 0)), 0
+        ) AS water_fria_delta,
+        GREATEST(
+          (MAX(COALESCE(NULLIF(inf.vazao_agua_quente, ''), '0') + 0) -
+           MIN(COALESCE(NULLIF(inf.vazao_agua_quente, ''), '0') + 0)), 0
+        ) AS water_quente_delta,
+        GREATEST(
+          (MAX(COALESCE(NULLIF(inf.vazao_agua_pet,    ''), '0') + 0) -
+           MIN(COALESCE(NULLIF(inf.vazao_agua_pet,    ''), '0') + 0)), 0
+        ) AS water_pets_delta
+      FROM informacoes inf FORCE INDEX (idx_informacoes_maquina_created)
+      WHERE inf.maquina_id = ?
+        AND inf.created_at >= ?
+        AND inf.created_at < ?
+      GROUP BY d
+    `;
+
+    const litersByMachine = new Map();
+
+    await Promise.all(
+      machineIds.map(async (mid) => {
+        const [rows] = await pool.query(perMachineDeltaSql, [
+          mid,
+          fromStr,
+          toPlus1Str,
+        ]);
+
+        let sum = 0;
+        for (const r of rows || []) {
+          const fria = Number(r.water_fria_delta || 0);
+          const quente = Number(r.water_quente_delta || 0);
+          const pets = Number(r.water_pets_delta || 0);
+          sum += fria + quente + pets;
+        }
+
+        const litros = sum * LITERS_SCALE;
+        litersByMachine.set(mid, litros);
+      })
+    );
+
+    // 2) busca metadados das máquinas (cidade/UF, nome, status)
+    const [machines] = await pool.query(
+      `
+      SELECT
+        m.id,
+        COALESCE(m.nome, CONCAT('EQP-', m.id)) AS equipamento,
+        c.nome AS cidade,
+        c.uf   AS uf,
+        m.status
+      FROM maquinas m
+      LEFT JOIN cidades c ON c.id = m.cidade_id
+      WHERE m.id IN (?)
+      `,
+      [machineIds]
+    );
+
+    // 3) monta os pontos que o MapView usa
+    const points = await Promise.all(
+      (machines || []).map(async (m) => {
+        const litros = Number(litersByMachine.get(m.id) || 0);
+
+        // Ativo se teve consumo no período, senão usa status cadastrado
+        let statusNorm = (m.status || "").toString().toLowerCase();
+        if (litros > 0) {
+          statusNorm = "ativo";
+        }
+
+        const status =
+          statusNorm === "ativo" || statusNorm === "1" ? "Ativo" : "Inativo";
+
+        // busca coordenadas (cache local + Nominatim se não tiver)
+        const coords = await getCityCoords(pool, m.cidade, m.uf);
+
+        return {
+          lat: coords.lat,
+          lng: coords.lng,
+          cidade: m.cidade || "Sem cidade",
+          uf: m.uf || "",
+          qtd: 1,
+          litros,
+          status,
+          equipamento: m.equipamento,
+        };
+      })
+    );
+
+    res.json({
+      points,
+      _period: { from: fromStr, to: toStr, email: userEmail || null },
+    });
+  } catch (e) {
+    console.error("Erro em /api/localizacao:", e);
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+/* -------------------- Séries Water / Triggers -------------------- */
+
 app.get("/api/series/water", async (req, res) => {
   try {
     const userEmail = req.userEmail;
@@ -432,7 +654,11 @@ app.get("/api/series/water", async (req, res) => {
     const toStr = to || defaultTo.toISOString().slice(0, 10);
     const fromStr = from || defaultFrom.toISOString().slice(0, 10);
 
-    const machineIds = await resolveMachineIds(userEmail, req.query);
+    const machineIds = await resolveMachineIds(
+      userEmail,
+      req.query,
+      req.isMaster
+    );
     if (!machineIds.length) {
       return res.json({
         labels: [],
@@ -522,8 +748,6 @@ app.get("/api/series/water", async (req, res) => {
   }
 });
 
-/* ---------------------- Séries (Acionamentos) ----------------------- */
-// delta diário → agregado por mês — AGORA COM FILTROS
 app.get("/api/series/triggers", async (req, res) => {
   try {
     const userEmail = req.userEmail;
@@ -536,7 +760,11 @@ app.get("/api/series/triggers", async (req, res) => {
     const toStr = to || defaultTo.toISOString().slice(0, 10);
     const fromStr = from || defaultFrom.toISOString().slice(0, 10);
 
-    const machineIds = await resolveMachineIds(userEmail, req.query);
+    const machineIds = await resolveMachineIds(
+      userEmail,
+      req.query,
+      req.isMaster
+    );
     if (!machineIds.length) {
       return res.json({
         labels: [],
@@ -624,13 +852,13 @@ app.get("/api/series/triggers", async (req, res) => {
   }
 });
 
-/* ----------------- Séries - Instalações por Mês (Equipamentos) ----------------- */
+/* -------- Séries - Instalações por mês / Acumulado -------- */
+
 app.get("/api/series/installations", async (req, res) => {
   try {
     const userEmail = req.userEmail;
     const { from, to } = req.query;
 
-    // período padrão: últimos 6 meses
     const defaultTo = new Date();
     const defaultFrom = new Date();
     defaultFrom.setMonth(defaultFrom.getMonth() - 5);
@@ -642,7 +870,11 @@ app.get("/api/series/installations", async (req, res) => {
         ? from
         : defaultFrom.toISOString().slice(0, 10);
 
-    const machineIds = await resolveMachineIds(userEmail, req.query);
+    const machineIds = await resolveMachineIds(
+      userEmail,
+      req.query,
+      req.isMaster
+    );
     if (!machineIds.length) {
       return res.json({
         labels: [],
@@ -651,7 +883,6 @@ app.get("/api/series/installations", async (req, res) => {
       });
     }
 
-    // Busca instalações agregadas por ano-mês
     const [rows] = await pool.query(
       `
       SELECT
@@ -668,13 +899,11 @@ app.get("/api/series/installations", async (req, res) => {
       [machineIds, fromStr, toStr]
     );
 
-    // Mapa ym -> quantidade
     const countsByYm = new Map();
     for (const r of rows) {
       countsByYm.set(r.ym, Number(r.instalacoes || 0));
     }
 
-    // Gera todos os meses no range, preenchendo 0 onde não tiver instalação
     const labels = [];
     const values = [];
 
@@ -714,7 +943,6 @@ app.get("/api/series/equipment-cumulative", async (req, res) => {
     const userEmail = req.userEmail;
     const { from, to } = req.query;
 
-    // período padrão: últimos 6 meses
     const defaultTo = new Date();
     const defaultFrom = new Date();
     defaultFrom.setMonth(defaultFrom.getMonth() - 5);
@@ -726,7 +954,11 @@ app.get("/api/series/equipment-cumulative", async (req, res) => {
         ? from
         : defaultFrom.toISOString().slice(0, 10);
 
-    const machineIds = await resolveMachineIds(userEmail, req.query);
+    const machineIds = await resolveMachineIds(
+      userEmail,
+      req.query,
+      req.isMaster
+    );
     if (!machineIds.length) {
       return res.json({
         labels: [],
@@ -735,7 +967,6 @@ app.get("/api/series/equipment-cumulative", async (req, res) => {
       });
     }
 
-    // 1) Quantos equipamentos (filtrados) já estavam instalados ANTES do período?
     const [[prevRow]] = await pool.query(
       `
       SELECT COUNT(*) AS prev
@@ -748,7 +979,6 @@ app.get("/api/series/equipment-cumulative", async (req, res) => {
     );
     let acumulado = Number(prevRow?.prev || 0);
 
-    // 2) Instalações por mês DENTRO do período
     const [rows] = await pool.query(
       `
       SELECT
@@ -770,7 +1000,6 @@ app.get("/api/series/equipment-cumulative", async (req, res) => {
       countsByYm.set(r.ym, Number(r.instalacoes || 0));
     }
 
-    // 3) Gera todos os meses do range, aplicando acumulado com base no saldo inicial
     const labels = [];
     const values = [];
 
@@ -812,13 +1041,13 @@ app.get("/api/series/equipment-cumulative", async (req, res) => {
   }
 });
 
-/* --------------------------- Pie (modelos) --------------------------- */
+/* ---------------------- Pie de Modelos ---------------------- */
+
 app.get("/api/models/pie", async (req, res) => {
   try {
     const userEmail = req.userEmail;
     const { from, to } = req.query;
 
-    // defaults: últimos 30 dias
     const defaultTo = new Date();
     const defaultFrom = new Date();
     defaultFrom.setDate(defaultFrom.getDate() - 30);
@@ -826,13 +1055,15 @@ app.get("/api/models/pie", async (req, res) => {
     const toStr = to || defaultTo.toISOString().slice(0, 10);
     const fromStr = from || defaultFrom.toISOString().slice(0, 10);
 
-    // máquinas já considerando filtros (usuario, modelo, equipamento, serie, status)
-    const machineIds = await resolveMachineIds(userEmail, req.query);
+    const machineIds = await resolveMachineIds(
+      userEmail,
+      req.query,
+      req.isMaster
+    );
     if (!machineIds.length) {
       return res.json([]);
     }
 
-    // Delta diário de litros por equipamento, agregado por modelo (tipo)
     const [rows] = await pool.query(
       `
       SELECT
@@ -879,8 +1110,8 @@ app.get("/api/models/pie", async (req, res) => {
   }
 });
 
-/* ---------------------------- Tabelas ------------------------------- */
-// Litros x Equipamentos (DELTA diário somado) — AGORA COM FILTROS
+/* ---------------------- Tabela: Litros x Equip ---------------------- */
+
 app.get("/api/tables/water-by-equipment", async (req, res) => {
   try {
     const userEmail = req.userEmail;
@@ -893,7 +1124,11 @@ app.get("/api/tables/water-by-equipment", async (req, res) => {
     const toStr = to || defaultTo.toISOString().slice(0, 10);
     const fromStr = from || defaultFrom.toISOString().slice(0, 10);
 
-    const machineIds = await resolveMachineIds(userEmail, req.query);
+    const machineIds = await resolveMachineIds(
+      userEmail,
+      req.query,
+      req.isMaster
+    );
     if (!machineIds.length) {
       return res.json({
         columns: ["Equipamento", "Litros"],
@@ -956,13 +1191,19 @@ app.get("/api/tables/water-by-equipment", async (req, res) => {
     res.status(500).json({ error: String(e) });
   }
 });
-/* -------------------- Tabela - Lista de Equipamentos -------------------- */
+
+/* ----------------- Tabela: Lista de Equipamentos ----------------- */
+
 app.get("/api/tables/equipment-list", async (req, res) => {
   try {
     const userEmail = req.userEmail;
     const { from, to } = req.query;
 
-    const machineIds = await resolveMachineIds(userEmail, req.query);
+    const machineIds = await resolveMachineIds(
+      userEmail,
+      req.query,
+      req.isMaster
+    );
 
     if (!machineIds.length) {
       return res.json({
@@ -987,14 +1228,13 @@ app.get("/api/tables/equipment-list", async (req, res) => {
       [machineIds]
     );
 
-    // Calcula a próxima troca e formata linhas
     const formatted = rowsRaw.map((r) => {
-      const dataTroca = r.data_instalacao ? new Date(r.data_instalacao) : null;
-      if (dataTroca) dataTroca.setMonth(dataTroca.getMonth() + 6);
+      const dataInst = r.data_instalacao ? new Date(r.data_instalacao) : null;
+      if (dataInst) dataInst.setMonth(dataInst.getMonth() + 6);
+      const proxTroca = dataInst
+        ? dataInst.toISOString().slice(0, 10)
+        : "Sem data";
 
-      const proxTroca = dataTroca?.toISOString().slice(0, 10) ?? "Sem data";
-
-      // Normaliza o status
       const statusFormatado =
         r.status === 1 ||
         r.status === "1" ||
@@ -1017,7 +1257,8 @@ app.get("/api/tables/equipment-list", async (req, res) => {
   }
 });
 
-// Acionamentos x Equipamentos (DELTA diário somado) — AGORA COM FILTROS
+/* ---------- Tabela: Acionamentos x Equipamentos ---------- */
+
 app.get("/api/tables/triggers-by-equipment", async (req, res) => {
   try {
     const userEmail = req.userEmail;
@@ -1030,7 +1271,11 @@ app.get("/api/tables/triggers-by-equipment", async (req, res) => {
     const toStr = to || defaultTo.toISOString().slice(0, 10);
     const fromStr = from || defaultFrom.toISOString().slice(0, 10);
 
-    const machineIds = await resolveMachineIds(userEmail, req.query);
+    const machineIds = await resolveMachineIds(
+      userEmail,
+      req.query,
+      req.isMaster
+    );
     if (!machineIds.length) {
       return res.json({
         columns: ["Equipamento", "Acionamentos"],
@@ -1098,12 +1343,13 @@ app.get("/api/tables/triggers-by-equipment", async (req, res) => {
   }
 });
 
+/* --------------------- KPIs e Summary de Localização --------------------- */
+
 app.get("/api/kpis/equipment", async (req, res) => {
   try {
     const userEmail = req.userEmail;
-    const { from, to } = req.query; // YYYY-MM-DD
+    const { from, to } = req.query;
 
-    // defaults: últimos 30 dias
     const defaultTo = new Date();
     const defaultFrom = new Date();
     defaultFrom.setDate(defaultFrom.getDate() - 30);
@@ -1111,8 +1357,11 @@ app.get("/api/kpis/equipment", async (req, res) => {
     const toStr = to || defaultTo.toISOString().slice(0, 10);
     const fromStr = from || defaultFrom.toISOString().slice(0, 10);
 
-    // máquinas já considerando usuário + filtros (usuario, modelo, equipamento, serie, status)
-    const machineIds = await resolveMachineIds(userEmail, req.query);
+    const machineIds = await resolveMachineIds(
+      userEmail,
+      req.query,
+      req.isMaster
+    );
 
     if (!machineIds.length) {
       return res.json({
@@ -1123,7 +1372,6 @@ app.get("/api/kpis/equipment", async (req, res) => {
       });
     }
 
-    // quais dessas máquinas tiveram atividade no período?
     const [activeRows] = await pool.query(
       `
       SELECT DISTINCT inf.maquina_id
@@ -1156,7 +1404,6 @@ app.get("/api/location/kpis", async (req, res) => {
     const userEmail = req.userEmail;
     const { from, to } = req.query;
 
-    // período padrão: últimos 30 dias
     const defaultTo = new Date();
     const defaultFrom = new Date();
     defaultFrom.setDate(defaultFrom.getDate() - 30);
@@ -1168,8 +1415,11 @@ app.get("/api/location/kpis", async (req, res) => {
         ? from
         : defaultFrom.toISOString().slice(0, 10);
 
-    // aplica filtros e limita às máquinas do usuário
-    const machineIds = await resolveMachineIds(userEmail, req.query);
+    const machineIds = await resolveMachineIds(
+      userEmail,
+      req.query,
+      req.isMaster
+    );
 
     if (!machineIds.length) {
       return res.json({
@@ -1180,8 +1430,6 @@ app.get("/api/location/kpis", async (req, res) => {
       });
     }
 
-    // "Usuários" / "Localizações":
-    // aqui vamos considerar cidades distintas das máquinas filtradas
     const [locRows] = await pool.query(
       `
       SELECT COUNT(DISTINCT m.cidade_id) AS qtd
@@ -1192,7 +1440,6 @@ app.get("/api/location/kpis", async (req, res) => {
     );
     const users_total = Number(locRows?.[0]?.qtd || 0);
 
-    // máquinas com atividade no período
     const [activeRows] = await pool.query(
       `
       SELECT DISTINCT inf.maquina_id
@@ -1228,7 +1475,6 @@ app.get("/api/location/summary", async (req, res) => {
     const userEmail = req.userEmail;
     const { from, to } = req.query;
 
-    // período padrão: últimos 30 dias
     const defaultTo = new Date();
     const defaultFrom = new Date();
     defaultFrom.setDate(defaultFrom.getDate() - 30);
@@ -1240,51 +1486,93 @@ app.get("/api/location/summary", async (req, res) => {
         ? from
         : defaultFrom.toISOString().slice(0, 10);
 
-    // máquinas já filtradas (usuario, modelo, equipamento, serie, status)
-    const machineIds = await resolveMachineIds(userEmail, req.query);
+    const toPlus1 = new Date(toStr);
+    toPlus1.setDate(toPlus1.getDate() + 1);
+    const toPlus1Str = toPlus1.toISOString().slice(0, 10);
+
+    // máquinas visíveis (usuário ou master) + filtros
+    const machineIds = await resolveMachineIds(
+      userEmail,
+      req.query,
+      req.isMaster
+    );
+
     if (!machineIds.length) {
       return res.json({
-        columns: ["Localização", "Total de Equipamentos", "Ativos", "Inativos"],
+        columns: [
+          "Localização",
+          "Total de Equipamentos",
+          "Ativos no período",
+          "Inativos no período",
+          "Litros no período",
+        ],
         rows: [],
         total: 0,
-        points: [],
         _period: { from: fromStr, to: toStr, email: userEmail },
       });
     }
 
-    // atividade no período (para saber ativos/inativos)
-    const [activeRows] = await pool.query(
-      `
-      SELECT DISTINCT inf.maquina_id
-        FROM informacoes inf FORCE INDEX (idx_informacoes_maquina_created)
-       WHERE inf.maquina_id IN (?)
-         AND inf.created_at >= ?
-         AND inf.created_at < DATE_ADD(?, INTERVAL 1 DAY)
-      `,
-      [machineIds, fromStr, toStr]
-    );
-    const activeSet = new Set(
-      (activeRows || []).map((r) => r.maquina_id).filter(Boolean)
+    // --- 1) Litros por máquina (mesma lógica dos KPIs) ---
+    const perMachineDeltaSql = `
+      SELECT
+        DATE(inf.created_at) AS d,
+        GREATEST(
+          (MAX(COALESCE(NULLIF(inf.vazao_agua_fria,   ''), '0') + 0) -
+           MIN(COALESCE(NULLIF(inf.vazao_agua_fria,   ''), '0') + 0)), 0
+        ) AS water_fria_delta,
+        GREATEST(
+          (MAX(COALESCE(NULLIF(inf.vazao_agua_quente, ''), '0') + 0) -
+           MIN(COALESCE(NULLIF(inf.vazao_agua_quente, ''), '0') + 0)), 0
+        ) AS water_quente_delta,
+        GREATEST(
+          (MAX(COALESCE(NULLIF(inf.vazao_agua_pet,    ''), '0') + 0) -
+           MIN(COALESCE(NULLIF(inf.vazao_agua_pet,    ''), '0') + 0)), 0
+        ) AS water_pets_delta
+      FROM informacoes inf FORCE INDEX (idx_informacoes_maquina_created)
+      WHERE inf.maquina_id = ?
+        AND inf.created_at >= ?
+        AND inf.created_at < ?
+      GROUP BY d
+    `;
+
+    const litersByMachine = new Map();
+
+    await Promise.all(
+      machineIds.map(async (mid) => {
+        const [rows] = await pool.query(perMachineDeltaSql, [
+          mid,
+          fromStr,
+          toPlus1Str,
+        ]);
+
+        let sum = 0;
+        for (const r of rows || []) {
+          const fria = Number(r.water_fria_delta || 0);
+          const quente = Number(r.water_quente_delta || 0);
+          const pets = Number(r.water_pets_delta || 0);
+          sum += fria + quente + pets;
+        }
+
+        const litros = sum * LITERS_SCALE;
+        litersByMachine.set(mid, litros);
+      })
     );
 
-    // agrega por cidade/local
-    // 👇 Ajuste aqui se o seu schema de cidades for diferente.
+    // --- 2) Máquinas agrupadas por cidade ---
     const [locRows] = await pool.query(
       `
       SELECT
-        COALESCE(c.nome, CONCAT('Cidade ', m.cidade_id)) AS nome,
         m.cidade_id,
-        COUNT(*) AS total_equip,
-        SUM(CASE WHEN m.id IN (?) THEN (m.id IN (?)) END) AS dummy -- só para manter compatibilidade
+        COALESCE(c.nome, CONCAT('Cidade ', m.cidade_id)) AS nome,
+        c.uf AS uf,
+        COUNT(*) AS total_equip
       FROM maquinas m
       LEFT JOIN cidades c ON c.id = m.cidade_id
       WHERE m.id IN (?)
-      GROUP BY m.cidade_id, nome
+      GROUP BY m.cidade_id, nome, uf
+      ORDER BY nome
       `,
-      // o terceiro "IN (?)" é o que importa (machineIds);
-      // os outros estão só para manter a sintaxe consistente,
-      // vamos calcular ativos/inativos na aplicação logo abaixo
-      [machineIds, [...activeSet], machineIds]
+      [machineIds]
     );
 
     const columns = [
@@ -1292,40 +1580,52 @@ app.get("/api/location/summary", async (req, res) => {
       "Total de Equipamentos",
       "Ativos no período",
       "Inativos no período",
+      "Litros no período",
     ];
 
-    const rows = locRows.map((r) => {
-      const total = Number(r.total_equip || 0);
+    const rows = [];
 
-      // conta quantos dessa cidade estão ativos no período
-      const ativos = machineIds.filter(
-        (id) => activeSet.has(id) && id // filtro já por usuário
-      ).length; // simplificado: se quiser por cidade exata, pode refinar com subquery
+    for (const r of locRows || []) {
+      // máquinas dessa cidade (dentro do conjunto filtrado)
+      const [cityMachines] = await pool.query(
+        `
+        SELECT m.id
+          FROM maquinas m
+         WHERE m.id IN (?)
+           AND m.cidade_id = ?
+        `,
+        [machineIds, r.cidade_id]
+      );
+
+      const ids = (cityMachines || []).map((m) => m.id);
+
+      const total = Number(r.total_equip || ids.length || 0);
+
+      // ativos = máquinas dessa cidade com litros > 0 no período
+      let ativos = 0;
+      let litrosTotal = 0;
+
+      for (const id of ids) {
+        const litros = litersByMachine.get(id) || 0;
+        litrosTotal += litros;
+        if (litros > 0) ativos++;
+      }
 
       const inativos = Math.max(total - ativos, 0);
 
-      return [r.nome, total, ativos, inativos];
-    });
-
-    // Pontos para o mapa (se tiver lat/lng em `cidades`)
-    const points = locRows
-      .map((r) => {
-        // Se sua tabela `cidades` tiver latitude/longitude, exponha aqui:
-        // return {
-        //   name: r.nome,
-        //   lat: r.latitude,
-        //   lng: r.longitude,
-        //   total: Number(r.total_equip || 0),
-        // };
-        return null; // placeholder: vamos ligar quando soubermos os campos
-      })
-      .filter(Boolean);
+      rows.push([
+        `${r.nome}${r.uf ? `/${r.uf}` : ""}`,
+        total,
+        ativos,
+        inativos,
+        litrosTotal,
+      ]);
+    }
 
     res.json({
       columns,
       rows,
       total: rows.length,
-      points,
       _period: { from: fromStr, to: toStr, email: userEmail },
     });
   } catch (e) {
@@ -1333,12 +1633,15 @@ app.get("/api/location/summary", async (req, res) => {
     res.status(500).json({ error: String(e) });
   }
 });
-/* ----------------------------- Filtros ------------------------------ */
-// Lista de opções de filtros (sem aplicar os filtros entre si)
+
+/* ------------------------- Filtros Options ------------------------- */
+
 app.get("/api/filters", async (req, res) => {
   try {
     const userEmail = req.userEmail;
-    const machineIds = await getUserMachineIds(userEmail);
+    const isMaster = !!req.isMaster;
+
+    const machineIds = await getUserMachineIds(userEmail, isMaster);
 
     const status = [
       { value: "Ativo", label: "Ativo" },
@@ -1356,17 +1659,43 @@ app.get("/api/filters", async (req, res) => {
       });
     }
 
-    // Usuário atual
-    const [userRows] = await pool.query(
-      `SELECT id, email, COALESCE(name, email) AS label
-         FROM users WHERE email = ? LIMIT 1`,
-      [userEmail]
-    );
-    const usuarios = (userRows || []).map((u) => ({
-      value: u.id,
-      label: u.label,
-      email: u.email,
-    }));
+    let usuarios = [];
+
+    if (isMaster) {
+      // Master: lista todos os usuários que têm máquinas vinculadas
+      const [userRows] = await pool.query(
+        `
+        SELECT DISTINCT u.id,
+               u.email,
+               COALESCE(u.name, u.email) AS label
+          FROM users u
+          JOIN usuarios_equipamentos ue ON ue.usuario_id = u.id
+          JOIN maquinas m ON m.id = ue.maquina_id
+         WHERE m.id IN (?)
+         ORDER BY label
+        `,
+        [machineIds]
+      );
+
+      usuarios = userRows.map((u) => ({
+        value: u.id,
+        label: u.label,
+        email: u.email,
+      }));
+    } else {
+      // Cliente normal: só ele mesmo
+      const [userRows] = await pool.query(
+        `SELECT id, email, COALESCE(name, email) AS label
+           FROM users WHERE email = ? LIMIT 1`,
+        [userEmail]
+      );
+
+      usuarios = (userRows || []).map((u) => ({
+        value: u.id,
+        label: u.label,
+        email: u.email,
+      }));
+    }
 
     // Modelos
     const [modelRows] = await pool.query(
@@ -1387,14 +1716,18 @@ app.get("/api/filters", async (req, res) => {
     // Equipamentos
     const [equipRows] = await pool.query(
       `
-      SELECT m.id, COALESCE(NULLIF(m.nome,''), CONCAT('EQP-', m.id)) AS nome
+      SELECT m.id,
+             COALESCE(NULLIF(m.nome,''), CONCAT('EQP-', m.id)) AS nome
         FROM maquinas m
        WHERE m.id IN (?)
     ORDER BY nome
       `,
       [machineIds]
     );
-    const equipamentos = equipRows.map((r) => ({ value: r.id, label: r.nome }));
+    const equipamentos = equipRows.map((r) => ({
+      value: r.id,
+      label: r.nome,
+    }));
 
     // Séries
     const [seriesRows] = await pool.query(
@@ -1422,6 +1755,7 @@ app.get("/api/filters", async (req, res) => {
       series,
       status,
       _email: userEmail,
+      _isMaster: isMaster,
     });
   } catch (e) {
     console.error(e);
@@ -1429,7 +1763,8 @@ app.get("/api/filters", async (req, res) => {
   }
 });
 
-/* ------------------------------- Debug ------------------------------ */
+/* ----------------------------- Debug ----------------------------- */
+
 app.get("/api/_debug/user-machines", async (req, res) => {
   try {
     const email = req.userEmail;
@@ -1450,7 +1785,8 @@ app.get("/api/_debug/user-machines", async (req, res) => {
   }
 });
 
-/* ----------------------------- Boot API ----------------------------- */
+/* ----------------------------- Boot ----------------------------- */
+
 const port = Number(process.env.PORT || 3001);
 app.listen(port, () => {
   console.log(`API rodando em http://localhost:${port}`);

@@ -9,15 +9,22 @@ import type {
 } from "./types";
 import { getToken, clearToken } from "./auth";
 
-const API_URL =
-  import.meta.env.VITE_API_URL?.toString() || "http://localhost:3001";
+// Base da API:
+// - em produção: defina VITE_API_URL (ex: https://api.seudominio.com)
+// - em dev: fallback para http://localhost:3001
+const API_BASE_URL = (
+  import.meta.env.VITE_API_URL?.toString() || "http://localhost:3001"
+).replace(/\/+$/, "");
 
 /** Adiciona filtros opcionais na URL */
 function appendFilters(url: URL, f?: Filters) {
   if (!f) return;
-  if (f.usuario !== undefined) url.searchParams.set("usuario", String(f.usuario));
-  if (f.modelo !== undefined) url.searchParams.set("modelo", String(f.modelo));
-  if (f.equipamento !== undefined) url.searchParams.set("equipamento", String(f.equipamento));
+  if (f.usuario !== undefined)
+    url.searchParams.set("usuario", String(f.usuario));
+  if (f.modelo !== undefined)
+    url.searchParams.set("modelo", String(f.modelo));
+  if (f.equipamento !== undefined)
+    url.searchParams.set("equipamento", String(f.equipamento));
   if (f.serie) url.searchParams.set("serie", f.serie);
   if (f.status) url.searchParams.set("status", f.status);
 }
@@ -30,35 +37,27 @@ function toYMD(d: Date) {
   return `${y}-${m}-${day}`;
 }
 
-/** Helper central: faz fetch com token JWT */
-async function authFetch(url: string, options: RequestInit = {}) {
-  const token = getToken();
-
-  const headers: HeadersInit = {
-    "Content-Type": "application/json",
-    ...(options.headers || {}),
-  };
-
-  if (token) {
-    headers["Authorization"] = `Bearer ${token}`;
+/** Constrói URL final (aceita path relativo ou URL absoluta) */
+function buildUrl(pathOrUrl: string): string {
+  // se já for absoluta, retorna como está
+  if (
+    pathOrUrl.startsWith("http://") ||
+    pathOrUrl.startsWith("https://")
+  ) {
+    return pathOrUrl;
   }
 
-  const res = await fetch(url, { ...options, headers });
-
-  // Se expirou o token → limpar e forçar login novamente
-  if (res.status === 401) {
-    clearToken();
-    window.location.reload();
+  // se for relativo, prefixa com base
+  if (!pathOrUrl.startsWith("/")) {
+    return `${API_BASE_URL}/${pathOrUrl}`;
   }
 
-  return res;
+  return `${API_BASE_URL}${pathOrUrl}`;
 }
 
-// =======================
-// Funções de API
-// =======================
+/** Helper central: fetch com JWT + tratamento de 401 */
 export async function apiFetch(
-  url: string,
+  pathOrUrl: string,
   options: RequestInit = {}
 ): Promise<Response> {
   const token = getToken();
@@ -67,7 +66,7 @@ export async function apiFetch(
     ...(options.headers || {}),
   };
 
-  // Só seta content-type se for body JSON explícito (pra não quebrar GET)
+  // Só define Content-Type se tiver body e não tiver sido definido
   if (
     options.body &&
     !(headers["Content-Type"] || headers["content-type"])
@@ -79,31 +78,35 @@ export async function apiFetch(
     headers["Authorization"] = `Bearer ${token}`;
   }
 
-  const res = await fetch(url, {
+  const res = await fetch(buildUrl(pathOrUrl), {
     ...options,
     headers,
   });
 
   if (res.status === 401) {
-    // Token inválido / expirado -> limpa e volta pro login
+    // Token inválido/expirado → limpa e volta pro login
     clearToken();
-    window.location.reload();
+    window.location.href = "/";
   }
 
   return res;
 }
+
+// =======================
+// Funções específicas de API
+// =======================
 
 export async function fetchKpis(
   from: Date,
   to: Date,
   filters?: Filters
 ): Promise<KpiData> {
-  const url = new URL(`${API_URL}/api/kpis`);
+  const url = new URL("/api/kpis", API_BASE_URL);
   url.searchParams.set("from", toYMD(from));
   url.searchParams.set("to", toYMD(to));
   appendFilters(url, filters);
 
-  const res = await authFetch(url.toString());
+  const res = await apiFetch(url.toString());
   if (!res.ok) throw new Error(`Falha ao buscar KPIs (${res.status})`);
   return (await res.json()) as KpiData;
 }
@@ -113,12 +116,12 @@ export async function fetchWaterSeries(
   to: Date,
   filters?: Filters
 ): Promise<SeriesData> {
-  const url = new URL(`${API_URL}/api/series/water`);
+  const url = new URL("/api/series/water", API_BASE_URL);
   url.searchParams.set("from", toYMD(from));
   url.searchParams.set("to", toYMD(to));
   appendFilters(url, filters);
 
-  const res = await authFetch(url.toString());
+  const res = await apiFetch(url.toString());
   if (!res.ok)
     throw new Error(`Falha ao buscar séries de água (${res.status})`);
   return (await res.json()) as SeriesData;
@@ -129,14 +132,16 @@ export async function fetchTriggerSeries(
   to: Date,
   filters?: Filters
 ): Promise<SeriesData> {
-  const url = new URL(`${API_URL}/api/series/triggers`);
+  const url = new URL("/api/series/triggers", API_BASE_URL);
   url.searchParams.set("from", toYMD(from));
   url.searchParams.set("to", toYMD(to));
   appendFilters(url, filters);
 
-  const res = await authFetch(url.toString());
+  const res = await apiFetch(url.toString());
   if (!res.ok)
-    throw new Error(`Falha ao buscar séries de acionamentos (${res.status})`);
+    throw new Error(
+      `Falha ao buscar séries de acionamentos (${res.status})`
+    );
   return (await res.json()) as SeriesData;
 }
 
@@ -145,14 +150,16 @@ export async function fetchModelPie(
   to: Date,
   filters?: Filters
 ): Promise<PieData[]> {
-  const url = new URL(`${API_URL}/api/models/pie`);
+  const url = new URL("/api/models/pie", API_BASE_URL);
   url.searchParams.set("from", toYMD(from));
   url.searchParams.set("to", toYMD(to));
   appendFilters(url, filters);
 
-  const res = await authFetch(url.toString());
+  const res = await apiFetch(url.toString());
   if (!res.ok)
-    throw new Error(`Falha ao buscar distribuição de modelos (${res.status})`);
+    throw new Error(
+      `Falha ao buscar distribuição de modelos (${res.status})`
+    );
   return (await res.json()) as PieData[];
 }
 
@@ -161,14 +168,19 @@ export async function fetchWaterByEquipment(
   to: Date,
   filters?: Filters
 ): Promise<TableData> {
-  const url = new URL(`${API_URL}/api/tables/water-by-equipment`);
+  const url = new URL(
+    "/api/tables/water-by-equipment",
+    API_BASE_URL
+  );
   url.searchParams.set("from", toYMD(from));
   url.searchParams.set("to", toYMD(to));
   appendFilters(url, filters);
 
-  const res = await authFetch(url.toString());
+  const res = await apiFetch(url.toString());
   if (!res.ok)
-    throw new Error(`Falha ao buscar tabela de água (${res.status})`);
+    throw new Error(
+      `Falha ao buscar tabela de água (${res.status})`
+    );
   return (await res.json()) as TableData;
 }
 
@@ -177,24 +189,31 @@ export async function fetchTriggerTable(
   to: Date,
   filters?: Filters
 ): Promise<TableData> {
-  const url = new URL(`${API_URL}/api/tables/triggers-by-equipment`);
+  const url = new URL(
+    "/api/tables/triggers-by-equipment",
+    API_BASE_URL
+  );
   url.searchParams.set("from", toYMD(from));
   url.searchParams.set("to", toYMD(to));
   appendFilters(url, filters);
 
-  const res = await authFetch(url.toString());
+  const res = await apiFetch(url.toString());
   if (!res.ok)
-    throw new Error(`Falha ao buscar tabela de acionamentos (${res.status})`);
+    throw new Error(
+      `Falha ao buscar tabela de acionamentos (${res.status})`
+    );
   return (await res.json()) as TableData;
 }
 
 export async function fetchFilters(): Promise<FilterOptions> {
-  const url = new URL(`${API_URL}/api/filters`);
-  const res = await authFetch(url.toString());
+  const url = new URL("/api/filters", API_BASE_URL);
+  const res = await apiFetch(url.toString());
   if (!res.ok) {
     const text = await res.text().catch(() => "");
     throw new Error(
-      `Falha ao buscar filtros (${res.status}): ${text || res.statusText}`
+      `Falha ao buscar filtros (${res.status}): ${
+        text || res.statusText
+      }`
     );
   }
   return (await res.json()) as FilterOptions;

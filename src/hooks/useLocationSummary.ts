@@ -1,11 +1,21 @@
 import { useEffect, useState } from "react";
 import type { Filters } from "@/lib/types";
+import { apiFetch } from "@/lib/api";
 
 interface LocationSummaryData {
   columns: string[];
   rows: (string | number)[][];
   total: number;
-  points: any[]; // se depois tiver lat/lng, tipamos melhor
+  points?: Array<{
+    cidade: string;
+    uf: string;
+    lat?: number | null;
+    lng?: number | null;
+    totalEquip?: number;
+    ativos?: number;
+    inativos?: number;
+    litrosTotal?: number;
+  }>;
 }
 
 export function useLocationSummary(
@@ -17,33 +27,53 @@ export function useLocationSummary(
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    const params = new URLSearchParams();
+    const controller = new AbortController();
 
-    if (dateRange.from)
-      params.set("from", dateRange.from.toISOString().slice(0, 10));
-    if (dateRange.to)
-      params.set("to", dateRange.to.toISOString().slice(0, 10));
+    const run = async () => {
+      try {
+        setLoading(true);
+        setError(null);
 
-    if (filters.usuario) params.set("usuario", String(filters.usuario));
-    if (filters.modelo) params.set("modelo", String(filters.modelo));
-    if (filters.equipamento)
-      params.set("equipamento", String(filters.equipamento));
-    if (filters.serie) params.set("serie", String(filters.serie));
-    if (filters.status) params.set("status", String(filters.status));
+        const params = new URLSearchParams();
 
-    setLoading(true);
-    setError(null);
+        if (dateRange.from)
+          params.set("from", dateRange.from.toISOString().slice(0, 10));
+        if (dateRange.to)
+          params.set("to", dateRange.to.toISOString().slice(0, 10));
 
-    fetch(`/api/location/summary?${params.toString()}`, {
-      headers: {
-        // temporário até ter auth real
-        "x-user-email": "acquareduz@icehot.net.br",
-      },
-    })
-      .then((r) => r.json())
-      .then((d) => setData(d))
-      .catch((e) => setError(String(e)))
-      .finally(() => setLoading(false));
+        if (filters.usuario) params.set("usuario", String(filters.usuario));
+        if (filters.modelo) params.set("modelo", String(filters.modelo));
+        if (filters.equipamento)
+          params.set("equipamento", String(filters.equipamento));
+        if (filters.serie) params.set("serie", String(filters.serie));
+        if (filters.status) params.set("status", String(filters.status));
+
+        const res = await apiFetch(`/api/location/summary?${params.toString()}`, {
+          signal: controller.signal,
+        });
+
+        if (!res.ok) {
+          const txt = await res.text().catch(() => "");
+          throw new Error(
+            `Erro ${res.status} ao carregar resumo de localização${
+              txt ? `: ${txt}` : ""
+            }`
+          );
+        }
+
+        const json = (await res.json()) as LocationSummaryData;
+        setData(json);
+      } catch (e: any) {
+        if (e.name === "AbortError") return;
+        setError(e?.message || "Erro ao carregar resumo de localização");
+        setData(null);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    run();
+    return () => controller.abort();
   }, [dateRange, filters]);
 
   return { data, loading, error };
