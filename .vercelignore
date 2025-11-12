@@ -1,0 +1,12 @@
+# Ignore o backend
+
+server/
+server/\*\*
+
+# Artefatos locais
+
+.env
+.env._
+docker-compose.yml
+Dockerfile
+_.md
