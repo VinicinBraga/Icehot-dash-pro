@@ -14,20 +14,19 @@ const MASTER_EMAILS = [
 ];
 /* --------------------------- CORS --------------------------- */
 // Em dev: libera geral. Em produção: ajuste os domínios.
-app.use(
-  cors({
-    origin: [
-      "http://localhost:8080",
-      "http://localhost:5173",
-      "http://127.0.0.1:8080",
-      "http://127.0.0.1:5173",
-      // coloque aqui depois: "https://seu-dash-na-vercel.vercel.app",
-      // "https://dashboard.seudominio.com.br",
-      "*",
-    ],
-    credentials: false,
-  })
-);
+const ALLOWED_ORIGINS = [
+  // produção
+  "https://icehot-dash-pro.vercel.app",
+
+  // (opcional) URL pública do Cloud Run, caso queira testar direto no navegador
+  "https://icehot-dash-api-750315205117.southamerica-east1.run.app",
+
+  // dev
+  "http://localhost:5173",
+  "http://127.0.0.1:5173",
+  "http://localhost:8080",
+  "http://127.0.0.1:8080",
+];
 
 app.use(express.json());
 
