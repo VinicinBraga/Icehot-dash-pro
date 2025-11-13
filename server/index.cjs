@@ -387,32 +387,34 @@ app.get("/api/kpis", async (req, res) => {
     const userEmail = req.userEmail;
     const { from, to } = req.query;
 
+    // intervalo padrão: últimos 30 dias
     const defaultTo = new Date();
     const defaultFrom = new Date();
     defaultFrom.setDate(defaultFrom.getDate() - 30);
 
-    const toStr = to || defaultTo.toISOString().slice(0, 10);
-    const fromStr = from || defaultFrom.toISOString().slice(0, 10);
+    const toStr =
+      to && typeof to === "string" ? to : defaultTo.toISOString().slice(0, 10);
+    const fromStr =
+      from && typeof from === "string"
+        ? from
+        : defaultFrom.toISOString().slice(0, 10);
 
+    // to + 1 dia para fazer o BETWEEN [from, to+1)
     const toPlus1 = new Date(toStr);
     toPlus1.setDate(toPlus1.getDate() + 1);
     const toPlus1Str = toPlus1.toISOString().slice(0, 10);
 
+    // máquinas visíveis para o usuário (ou todas, se master)
     const machineIds = await resolveMachineIds(
       userEmail,
       req.query,
       req.isMaster
     );
+
     if (!machineIds.length) {
       return res.json({
         water: { total: 0, fria: 0, quente: 0, pets: 0 },
-        triggers: {
-          total: 0,
-          fria: 0,
-          quente: 0,
-          pets: 0,
-          aspersor: 0,
-        },
+        triggers: { total: 0, fria: 0, quente: 0, pets: 0, aspersor: 0 },
         equipamentos_utilizados: 0,
         garrafas_poupadas: 0,
         co2_poupado_m3: 0,
@@ -420,95 +422,131 @@ app.get("/api/kpis", async (req, res) => {
       });
     }
 
-    const perMachineDeltaSql = `
+    // === MESMA IDEIA DO BQ: LAG POR DIA/MÁQUINA ===
+    const [rows] = await pool.query(
+      `
+      WITH base AS (
+        SELECT
+          inf.maquina_id,
+          -- data “local” (pode ajustar o fuso se quiser, aqui deixei direto)
+          DATE(inf.created_at) AS event_date,
+          -- vazões
+          CAST(COALESCE(NULLIF(inf.vazao_agua_fria,   ''), '0') AS DOUBLE) AS v_fria,
+          CAST(COALESCE(NULLIF(inf.vazao_agua_quente, ''), '0') AS DOUBLE) AS v_quente,
+          CAST(COALESCE(NULLIF(inf.vazao_agua_pet,    ''), '0') AS DOUBLE) AS v_pet,
+          -- contadores de acionamento
+          CAST(COALESCE(NULLIF(inf.contador_acionamentos_agua_fria,   ''), '0') AS DOUBLE) AS c_fria,
+          CAST(COALESCE(NULLIF(inf.contador_acionamentos_agua_quente, ''), '0') AS DOUBLE) AS c_quente,
+          CAST(COALESCE(NULLIF(inf.contador_acionamentos_agua_pet,    ''), '0') AS DOUBLE) AS c_pet,
+          CAST(COALESCE(NULLIF(inf.contador_acionamentos_aspersor,    ''), '0') AS DOUBLE) AS c_asp,
+          inf.created_at AS created_at_ts,
+          inf.id
+        FROM informacoes inf FORCE INDEX (idx_informacoes_maquina_created)
+        WHERE inf.maquina_id IN (?)
+          AND inf.created_at >= ?
+          AND inf.created_at < ?
+      ),
+      deltas AS (
+        SELECT
+          maquina_id,
+          event_date,
+          -- litros: delta positivo por linha, por máquina (sem reset diário)
+          GREATEST(
+            0,
+            v_fria - LAG(v_fria) OVER (
+              PARTITION BY maquina_id
+              ORDER BY created_at_ts, id
+            )
+          ) AS d_v_fria,
+          GREATEST(
+            0,
+            v_quente - LAG(v_quente) OVER (
+              PARTITION BY maquina_id
+              ORDER BY created_at_ts, id
+            )
+          ) AS d_v_quente,
+          GREATEST(
+            0,
+            v_pet - LAG(v_pet) OVER (
+              PARTITION BY maquina_id
+              ORDER BY created_at_ts, id
+            )
+          ) AS d_v_pet,
+          -- acionamentos
+          GREATEST(
+            0,
+            c_fria - LAG(c_fria) OVER (
+              PARTITION BY maquina_id
+              ORDER BY created_at_ts, id
+            )
+          ) AS d_c_fria,
+          GREATEST(
+            0,
+            c_quente - LAG(c_quente) OVER (
+              PARTITION BY maquina_id
+              ORDER BY created_at_ts, id
+            )
+          ) AS d_c_quente,
+          GREATEST(
+            0,
+            c_pet - LAG(c_pet) OVER (
+              PARTITION BY maquina_id
+              ORDER BY created_at_ts, id
+            )
+          ) AS d_c_pet,
+          GREATEST(
+            0,
+            c_asp - LAG(c_asp) OVER (
+              PARTITION BY maquina_id
+              ORDER BY created_at_ts, id
+            )
+          ) AS d_c_asp
+        FROM base
+      )
       SELECT
-        DATE(inf.created_at) AS d,
-        GREATEST(
-          (MAX(COALESCE(NULLIF(inf.vazao_agua_fria,   ''), '0') + 0) -
-           MIN(COALESCE(NULLIF(inf.vazao_agua_fria,   ''), '0') + 0)), 0
-        ) AS water_fria_delta,
-        GREATEST(
-          (MAX(COALESCE(NULLIF(inf.vazao_agua_quente, ''), '0') + 0) -
-           MIN(COALESCE(NULLIF(inf.vazao_agua_quente, ''), '0') + 0)), 0
-        ) AS water_quente_delta,
-        GREATEST(
-          (MAX(COALESCE(NULLIF(inf.vazao_agua_pet,    ''), '0') + 0) -
-           MIN(COALESCE(NULLIF(inf.vazao_agua_pet,    ''), '0') + 0)), 0
-        ) AS water_pets_delta,
-        GREATEST(
-          (MAX(COALESCE(NULLIF(inf.contador_acionamentos_agua_fria,   ''), '0') + 0) -
-           MIN(COALESCE(NULLIF(inf.contador_acionamentos_agua_fria,   ''), '0') + 0)), 0
-        ) AS trg_fria_delta,
-        GREATEST(
-          (MAX(COALESCE(NULLIF(inf.contador_acionamentos_agua_quente, ''), '0') + 0) -
-           MIN(COALESCE(NULLIF(inf.contador_acionamentos_agua_quente, ''), '0') + 0)), 0
-        ) AS trg_quente_delta,
-        GREATEST(
-          (MAX(COALESCE(NULLIF(inf.contador_acionamentos_agua_pet,    ''), '0') + 0) -
-           MIN(COALESCE(NULLIF(inf.contador_acionamentos_agua_pet,    ''), '0') + 0)), 0
-        ) AS trg_pets_delta,
-        GREATEST(
-          (MAX(COALESCE(NULLIF(inf.contador_acionamentos_aspersor,    ''), '0') + 0) -
-           MIN(COALESCE(NULLIF(inf.contador_acionamentos_aspersor,    ''), '0') + 0)), 0
-        ) AS trg_aspersor_delta
-      FROM informacoes inf FORCE INDEX (idx_informacoes_maquina_created)
-      WHERE inf.maquina_id = ?
-        AND inf.created_at >= ?
-        AND inf.created_at < ?
-      GROUP BY d
-    `;
-
-    const nz = (x) => Math.max(0, Number(x ?? 0));
-
-    let sum_fria = 0,
-      sum_quente = 0,
-      sum_pets = 0;
-    let sum_trg_fria = 0,
-      sum_trg_quente = 0,
-      sum_trg_pets = 0,
-      sum_trg_aspersor = 0;
-
-    await Promise.all(
-      machineIds.map(async (mid) => {
-        const [rows] = await pool.query(perMachineDeltaSql, [
-          mid,
-          fromStr,
-          toPlus1Str,
-        ]);
-        for (const r of rows) {
-          sum_fria += nz(r.water_fria_delta) * LITERS_SCALE;
-          sum_quente += nz(r.water_quente_delta) * LITERS_SCALE;
-          sum_pets += nz(r.water_pets_delta) * LITERS_SCALE;
-
-          sum_trg_fria += nz(r.trg_fria_delta);
-          sum_trg_quente += nz(r.trg_quente_delta);
-          sum_trg_pets += nz(r.trg_pets_delta);
-          sum_trg_aspersor += nz(r.trg_aspersor_delta);
-        }
-      })
+        SUM(d_v_fria)   AS sum_v_fria,
+        SUM(d_v_quente) AS sum_v_quente,
+        SUM(d_v_pet)    AS sum_v_pet,
+        SUM(d_c_fria)   AS sum_c_fria,
+        SUM(d_c_quente) AS sum_c_quente,
+        SUM(d_c_pet)    AS sum_c_pet,
+        SUM(d_c_asp)    AS sum_c_asp
+      FROM deltas
+      `,
+      [machineIds, fromStr, toPlus1Str]
     );
 
-    const water_total = sum_fria + sum_quente + sum_pets;
-    const trg_total =
-      sum_trg_fria + sum_trg_quente + sum_trg_pets + sum_trg_aspersor;
+    const row = rows[0] || {};
+
+    // aplica o mesmo SCALE de litros que usamos no BQ
+    const litros_fria = Number(row.sum_v_fria || 0) * LITERS_SCALE;
+    const litros_quente = Number(row.sum_v_quente || 0) * LITERS_SCALE;
+    const litros_pets = Number(row.sum_v_pet || 0) * LITERS_SCALE;
+    const litros_total = litros_fria + litros_quente + litros_pets;
+
+    const trg_fria = Number(row.sum_c_fria || 0);
+    const trg_quente = Number(row.sum_c_quente || 0);
+    const trg_pets = Number(row.sum_c_pet || 0);
+    const trg_aspersor = Number(row.sum_c_asp || 0);
+    const trg_total = trg_fria + trg_quente + trg_pets + trg_aspersor;
 
     const equipamentos_utilizados = machineIds.length;
-    const garrafas_poupadas = water_total / BOTTLE_LITERS;
-    const co2_poupado_m3 = water_total * CO2_PER_LITER_M3;
+    const garrafas_poupadas = litros_total / BOTTLE_LITERS;
+    const co2_poupado_m3 = litros_total * CO2_PER_LITER_M3;
 
-    res.json({
+    return res.json({
       water: {
-        total: water_total,
-        fria: sum_fria,
-        quente: sum_quente,
-        pets: sum_pets,
+        total: litros_total,
+        fria: litros_fria,
+        quente: litros_quente,
+        pets: litros_pets,
       },
       triggers: {
         total: trg_total,
-        fria: sum_trg_fria,
-        quente: sum_trg_quente,
-        pets: sum_trg_pets,
-        aspersor: sum_trg_aspersor,
+        fria: trg_fria,
+        quente: trg_quente,
+        pets: trg_pets,
+        aspersor: trg_aspersor,
       },
       equipamentos_utilizados,
       garrafas_poupadas,
@@ -516,7 +554,7 @@ app.get("/api/kpis", async (req, res) => {
       _period: { from: fromStr, to: toStr, email: userEmail },
     });
   } catch (e) {
-    console.error(e);
+    console.error("Erro em /api/kpis:", e);
     res.status(500).json({ error: String(e) });
   }
 });
