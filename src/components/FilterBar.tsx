@@ -143,9 +143,12 @@ export function FilterBar({
 
       {/* Status */}
       <Select
-        value={filters.status}
+        value={filters.status ?? "all"}
         onValueChange={(value) =>
-          onChange({ ...filters, status: value === "all" ? undefined : value })
+          onChange({
+            ...filters,
+            status: value === "all" ? undefined : value, // não manda status quando for "Todos"
+          })
         }
         disabled={loading}
       >
@@ -154,11 +157,8 @@ export function FilterBar({
         </SelectTrigger>
         <SelectContent>
           <SelectItem value="all">Todos</SelectItem>
-          {opts.status.map((s) => (
-            <SelectItem key={s.value} value={s.value}>
-              {s.label}
-            </SelectItem>
-          ))}
+          <SelectItem value="0">Ativos</SelectItem>
+          <SelectItem value="2">Inativos</SelectItem>
         </SelectContent>
       </Select>
     </div>

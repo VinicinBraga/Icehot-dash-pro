@@ -120,16 +120,34 @@ const Index = () => {
 
     const params = new URLSearchParams();
 
-    if (dateRange.from)
+    if (dateRange.from) {
       params.set("from", dateRange.from.toISOString().slice(0, 10));
-    if (dateRange.to) params.set("to", dateRange.to.toISOString().slice(0, 10));
+    }
+    if (dateRange.to) {
+      params.set("to", dateRange.to.toISOString().slice(0, 10));
+    }
 
-    if (filters.usuario) params.set("usuario", String(filters.usuario));
-    if (filters.modelo) params.set("modelo", String(filters.modelo));
-    if (filters.equipamento)
+    if (filters.usuario !== undefined && filters.usuario !== null) {
+      params.set("usuario", String(filters.usuario));
+    }
+    if (filters.modelo !== undefined && filters.modelo !== null) {
+      params.set("modelo", String(filters.modelo));
+    }
+    if (filters.equipamento !== undefined && filters.equipamento !== null) {
       params.set("equipamento", String(filters.equipamento));
-    if (filters.serie) params.set("serie", String(filters.serie));
-    if (filters.status) params.set("status", String(filters.status));
+    }
+    if (filters.serie) {
+      params.set("serie", String(filters.serie));
+    }
+
+    // 👇 aqui garantimos que "0" também entra
+    if (
+      filters.status !== undefined &&
+      filters.status !== null &&
+      filters.status !== ""
+    ) {
+      params.set("status", String(filters.status));
+    }
 
     apiFetch(`/api/kpis/equipment?${params.toString()}`)
       .then((res) => res.json())
@@ -158,16 +176,33 @@ const Index = () => {
 
     const params = new URLSearchParams();
 
-    if (dateRange.from)
+    if (dateRange.from) {
       params.set("from", dateRange.from.toISOString().slice(0, 10));
-    if (dateRange.to) params.set("to", dateRange.to.toISOString().slice(0, 10));
+    }
+    if (dateRange.to) {
+      params.set("to", dateRange.to.toISOString().slice(0, 10));
+    }
 
-    if (filters.usuario) params.set("usuario", String(filters.usuario));
-    if (filters.modelo) params.set("modelo", String(filters.modelo));
-    if (filters.equipamento)
+    if (filters.usuario !== undefined && filters.usuario !== null) {
+      params.set("usuario", String(filters.usuario));
+    }
+    if (filters.modelo !== undefined && filters.modelo !== null) {
+      params.set("modelo", String(filters.modelo));
+    }
+    if (filters.equipamento !== undefined && filters.equipamento !== null) {
       params.set("equipamento", String(filters.equipamento));
-    if (filters.serie) params.set("serie", String(filters.serie));
-    if (filters.status) params.set("status", String(filters.status));
+    }
+    if (filters.serie) {
+      params.set("serie", String(filters.serie));
+    }
+
+    if (
+      filters.status !== undefined &&
+      filters.status !== null &&
+      filters.status !== ""
+    ) {
+      params.set("status", String(filters.status));
+    }
 
     apiFetch(`/api/tables/equipment-list?${params.toString()}`)
       .then((res) => res.json())

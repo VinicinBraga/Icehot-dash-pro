@@ -629,12 +629,6 @@ app.get("/api/localizacao", async (req, res) => {
       (machines || []).map(async (m) => {
         const litros = Number(litersByMachine.get(m.id) || 0);
 
-        // Ativo se teve consumo no período, senão usa status cadastrado
-        let statusNorm = (m.status || "").toString().toLowerCase();
-        if (litros > 0) {
-          statusNorm = "ativo";
-        }
-
         const status =
           statusNorm === "ativo" || statusNorm === "1" ? "Ativo" : "Inativo";
 
@@ -1259,12 +1253,17 @@ app.get("/api/tables/equipment-list", async (req, res) => {
         ? dataInst.toISOString().slice(0, 10)
         : "Sem data";
 
-      const statusFormatado =
-        r.status === 1 ||
-        r.status === "1" ||
-        r.status?.toLowerCase?.() === "ativo"
-          ? "Ativo"
-          : "Inativo";
+      // 👇 Ajuste da regra de status: 0 = Ativo, 2 = Inativo
+      const statusNum = Number(r.status);
+
+      let statusFormatado;
+      if (statusNum === 0) {
+        statusFormatado = "Ativo";
+      } else if (statusNum === 2) {
+        statusFormatado = "Inativo";
+      } else {
+        statusFormatado = "Desconhecido";
+      }
 
       return [r.equipamento, r.modelo, statusFormatado, proxTroca];
     });
@@ -1668,8 +1667,8 @@ app.get("/api/filters", async (req, res) => {
     const machineIds = await getUserMachineIds(userEmail, isMaster);
 
     const status = [
-      { value: "Ativo", label: "Ativo" },
-      { value: "Inativo", label: "Inativo" },
+      { value: "0", label: "Ativo" },
+      { value: "2", label: "Inativo" },
     ];
 
     if (!machineIds.length) {

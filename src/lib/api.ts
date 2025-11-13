@@ -27,14 +27,27 @@ function toYMD(d: Date) {
 
 function appendFilters(url: URL, f?: Filters) {
   if (!f) return;
-  if (f.usuario !== undefined)
+
+  if (f.usuario !== undefined && f.usuario !== null) {
     url.searchParams.set("usuario", String(f.usuario));
-  if (f.modelo !== undefined)
+  }
+
+  if (f.modelo !== undefined && f.modelo !== null) {
     url.searchParams.set("modelo", String(f.modelo));
-  if (f.equipamento !== undefined)
+  }
+
+  if (f.equipamento !== undefined && f.equipamento !== null) {
     url.searchParams.set("equipamento", String(f.equipamento));
-  if (f.serie) url.searchParams.set("serie", f.serie);
-  if (f.status) url.searchParams.set("status", f.status);
+  }
+
+  if (f.serie) {
+    url.searchParams.set("serie", f.serie);
+  }
+
+  // 👇 Aqui garantimos que o status 0 não seja "ignorado"
+  if (f.status !== undefined && f.status !== null && f.status !== "") {
+    url.searchParams.set("status", String(f.status));
+  }
 }
 
 function buildUrl(pathOrUrl: string): string {
