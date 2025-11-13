@@ -1,8 +1,14 @@
 import type { Config } from "tailwindcss";
+import defaultTheme from "tailwindcss/defaultTheme";
 
 export default {
   darkMode: ["class"],
-  content: ["./pages/**/*.{ts,tsx}", "./components/**/*.{ts,tsx}", "./app/**/*.{ts,tsx}", "./src/**/*.{ts,tsx}"],
+  content: [
+    "./pages/**/*.{ts,tsx}",
+    "./components/**/*.{ts,tsx}",
+    "./app/**/*.{ts,tsx}",
+    "./src/**/*.{ts,tsx}",
+  ],
   prefix: "",
   theme: {
     container: {
@@ -13,6 +19,12 @@ export default {
       },
     },
     extend: {
+      // 👇 ADICIONE ESTE BLOCO AQUI
+      fontFamily: {
+        sans: ["Lato", ...defaultTheme.fontFamily.sans],
+      },
+      // 👆 até aqui
+
       colors: {
         border: "hsl(var(--border))",
         input: "hsl(var(--input))",

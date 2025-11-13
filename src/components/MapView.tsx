@@ -167,7 +167,7 @@ export default function MapView({ dateRange, filters }: Props) {
       )}
 
       {!loading && !error && cityMarkers.length > 0 && (
-        <div className="h-[calc(100%-3rem)] rounded-xl overflow-hidden">
+        <div className="h-[calc(100%-3rem)] rounded-xl overflow-hidden relative z-0">
           <MapContainer
             center={center}
             zoom={6}

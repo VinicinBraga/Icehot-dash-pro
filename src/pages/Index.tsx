@@ -4,8 +4,19 @@ import { subDays } from "date-fns";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { BarChart3, Package, MapPin } from "lucide-react";
-
+import {
+  Activity,
+  BarChart3,
+  Package,
+  MapPin,
+  Droplet,
+  Snowflake,
+  Flame,
+  PawPrint,
+  Milk,
+  Cloud,
+  Cog,
+} from "lucide-react";
 import { DateRangePicker } from "@/components/DateRangePicker";
 import { FilterBar } from "@/components/FilterBar";
 import { KpiCard } from "@/components/KpiCard";
@@ -228,30 +239,84 @@ const Index = () => {
   return (
     <div className="min-h-screen bg-background">
       {/* Header */}
-      <header className="border-b border-border bg-card">
-        <div className="container mx-auto px-6 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="h-10 w-10 rounded-xl bg-primary flex items-center justify-center">
-              <span className="text-primary-foreground font-bold text-lg">
-                IH
-              </span>
+      <header className="border-b border-border bg-card/80 backdrop-blur">
+        <div className="max-w-[1400px] mx-auto px-6 py-3 flex items-center justify-between gap-4">
+          {/* Logo + título */}
+          <div className="flex items-center gap-4 md:gap-5">
+            {/* Logo bem grande */}
+            <div className="flex items-center">
+              <img
+                src="/Icehot_Logo_FundoBranco.png"
+                alt="Icehot"
+                className="h-16 md:h-20 lg:h-24 w-auto object-contain drop-shadow-sm"
+              />
             </div>
-            <h1 className="text-2xl font-bold">Icehot Dashboard</h1>
-          </div>
-          <div className="flex items-center gap-3">
-            <DateRangePicker value={dateRange} onChange={setDateRange} />
 
+            {/* Texto ao lado da logo */}
+            <div className="leading-tight">
+              <div className="text-[11px] md:text-xs uppercase tracking-[0.25em] text-[#1105f2]">
+                Icehot
+              </div>
+              <h1 className="text-xl md:text-3xl font-semibold text-foreground">
+                Manager Dashboard
+              </h1>
+              <p className="text-xs md:text-sm text-muted-foreground mt-1">
+                Monitoramento em tempo real de consumo e equipamentos
+              </p>
+            </div>
+          </div>
+
+          {/* Período + logout */}
+          <div className="flex items-center gap-4">
+            {/* “Pílula” do período – mais comprida e alta */}
+            <div
+              className="
+      hidden sm:flex items-center 
+      rounded-full border border-border bg-background 
+      px-5 py-2 
+      min-w-[320px]
+      text-sm
+      justify-between
+    "
+            >
+              <span className="mr-2 text-xs font-medium text-muted-foreground">
+                Período:
+              </span>
+
+              <div className="flex-1">
+                <DateRangePicker value={dateRange} onChange={setDateRange} />
+              </div>
+            </div>
+
+            {/* Mobile: simples, sem pílula grande */}
+            <div className="sm:hidden">
+              <DateRangePicker value={dateRange} onChange={setDateRange} />
+            </div>
+
+            {/* Botão de logout cinza, mesma “grossura” e hover azul */}
             <Button
+              type="button"
               variant="outline"
-              size="sm"
-              className="flex items-center gap-2"
+              className="
+      h-[40px]
+      rounded-full 
+      px-5
+      border-border 
+      bg-muted 
+      text-foreground
+      hover:bg-[#1105f2] 
+      hover:text-white 
+      hover:border-[#1105f2]
+      transition-all 
+      flex items-center gap-2
+    "
               onClick={() => {
                 clearToken();
-                window.location.href = "/"; // volta pra tela de login
+                window.location.href = "/";
               }}
             >
               <LogOut className="h-4 w-4" />
-              Logout
+              <span className="hidden sm:inline">Sair</span>
             </Button>
           </div>
         </div>
@@ -270,16 +335,25 @@ const Index = () => {
 
         {/* Tabs */}
         <Tabs value={activeTab} onValueChange={setActiveTab}>
-          <TabsList className="grid w-full max-w-md grid-cols-3 rounded-2xl">
-            <TabsTrigger value="overview" className="rounded-xl gap-2">
+          <TabsList className="grid w-full max-w-lg grid-cols-3 rounded-2xl h-14 p-1">
+            <TabsTrigger
+              value="overview"
+              className="rounded-xl gap-2 h-12 text-base px-4"
+            >
               <BarChart3 className="h-4 w-4" />
               Visão Geral
             </TabsTrigger>
-            <TabsTrigger value="equipment" className="rounded-xl gap-2">
+            <TabsTrigger
+              value="equipment"
+              className="rounded-xl gap-2 h-12 text-base px-4"
+            >
               <Package className="h-4 w-4" />
               Equipamentos
             </TabsTrigger>
-            <TabsTrigger value="location" className="rounded-xl gap-2">
+            <TabsTrigger
+              value="location"
+              className="rounded-xl gap-2 h-12 text-base px-4"
+            >
               <MapPin className="h-4 w-4" />
               Localização
             </TabsTrigger>
@@ -301,6 +375,7 @@ const Index = () => {
                 helpText="Volume total distribuído"
                 suffix="L"
                 formatter={formatLiters}
+                icon={<Droplet />}
               />
               <KpiCard
                 label="Água Fria"
@@ -308,6 +383,7 @@ const Index = () => {
                 helpText="Litros de água fria"
                 suffix="L"
                 formatter={formatLiters}
+                icon={<Snowflake />}
               />
               <KpiCard
                 label="Água Quente"
@@ -315,6 +391,7 @@ const Index = () => {
                 helpText="Litros de água quente"
                 suffix="L"
                 formatter={formatLiters}
+                icon={<Flame />}
               />
               <KpiCard
                 label="Pets"
@@ -322,6 +399,7 @@ const Index = () => {
                 helpText="Litros para pets"
                 suffix="L"
                 formatter={formatLiters}
+                icon={<PawPrint />}
               />
             </div>
 
@@ -332,24 +410,28 @@ const Index = () => {
                 value={val(kpis?.triggers.total)}
                 helpText="Total de acionamentos"
                 formatter={formatClicks}
+                icon={<Activity />}
               />
               <KpiCard
                 label="Acionamento – Fria"
                 value={val(kpis?.triggers.fria)}
                 helpText="Acionamentos água fria"
                 formatter={formatClicks}
+                icon={<Snowflake />}
               />
               <KpiCard
                 label="Acionamento – Quente"
                 value={val(kpis?.triggers.quente)}
                 helpText="Acionamentos água quente"
                 formatter={formatClicks}
+                icon={<Flame />}
               />
               <KpiCard
                 label="Acionamento – Pets"
                 value={val(kpis?.triggers.pets)}
                 helpText="Acionamentos pets"
                 formatter={formatClicks}
+                icon={<PawPrint />}
               />
             </div>
 
@@ -359,12 +441,14 @@ const Index = () => {
                 label="Equipamentos Utilizados"
                 value={val(kpis?.equipamentos_utilizados)}
                 helpText="Equipamentos com registros no período"
+                icon={<Cog />}
               />
               <KpiCard
                 label="Garrafas Poupadas"
                 value={val(kpis?.garrafas_poupadas)}
                 helpText="Garrafas plásticas economizadas"
                 formatter={formatBottles}
+                icon={<Milk />}
               />
               <KpiCard
                 label="CO₂ Poupado"
@@ -372,6 +456,7 @@ const Index = () => {
                 suffix=" m³"
                 helpText="Emissão de CO₂ evitada"
                 formatter={formatCO2}
+                icon={<Cloud />}
               />
             </div>
 
@@ -383,8 +468,8 @@ const Index = () => {
 
             <ModelPieChart data={modelPie.data ?? undefined} />
 
-            {/* Tables */}
-            <div className="space-y-6">
+            {/* Tables lado a lado */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               <DataTable
                 title="Litros x Equipamentos"
                 columns={waterTable.data?.columns ?? []}

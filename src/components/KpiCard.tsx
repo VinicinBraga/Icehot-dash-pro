@@ -1,33 +1,48 @@
+// src/components/KpiCard.tsx
 import { Card } from "@/components/ui/card";
-import { cn } from "@/lib/utils";
-import { formatNumber } from "@/lib/format";
+import type { ReactNode } from "react";
 
-type KpiCardProps = {
+interface KpiCardProps {
   label: string;
-  value: number;
+  value: number | string;
   helpText?: string;
   suffix?: string;
-  formatter?: (n: number) => string; // <--- NOVO
-};
+  formatter?: (v: number) => string;
+  icon?: ReactNode; // 👈 ícone opcional
+}
 
 export function KpiCard({
   label,
   value,
   helpText,
-  suffix,
+  suffix = "",
   formatter,
+  icon,
 }: KpiCardProps) {
-  const text = formatter ? formatter(value) : String(value);
+  const display = formatter ? formatter(Number(value)) : value;
+
   return (
-    <div className="rounded-2xl border border-border bg-card p-4">
-      <div className="text-sm text-muted-foreground">{label}</div>
-      <div className="text-2xl font-semibold">
-        {text}
-        {suffix ? ` ${suffix}` : ""}
+    <Card className="relative p-4 rounded-xl shadow-sm border border-border overflow-hidden">
+      {/* Ícone no canto inferior direito */}
+      {icon && (
+        <div className="absolute bottom-2 right-2 pointer-events-none">
+          <div className="h-8 w-8 text-primary/40">
+            {/* os ícones do lucide pegam a cor de `currentColor` */}
+            {icon}
+          </div>
+        </div>
+      )}
+
+      <div className="text-xs text-muted-foreground">{label}</div>
+
+      <div className="text-2xl font-semibold mt-1">
+        {display}
+        {suffix}
       </div>
+
       {helpText && (
         <div className="text-xs text-muted-foreground mt-1">{helpText}</div>
       )}
-    </div>
+    </Card>
   );
 }

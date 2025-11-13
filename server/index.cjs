@@ -629,10 +629,24 @@ app.get("/api/localizacao", async (req, res) => {
       (machines || []).map(async (m) => {
         const litros = Number(litersByMachine.get(m.id) || 0);
 
-        const status =
-          statusNorm === "ativo" || statusNorm === "1" ? "Ativo" : "Inativo";
+        // Normaliza status vindo do banco
+        let statusNorm = (m.status ?? "").toString().trim().toLowerCase();
 
-        // busca coordenadas (cache local + Nominatim se não tiver)
+        // Se vier como código numérico (0 / 2), converte
+        const sNum = Number(statusNorm);
+        if (!Number.isNaN(sNum)) {
+          if (sNum === 0) statusNorm = "ativo";
+          else if (sNum === 2) statusNorm = "inativo";
+        }
+
+        // Regra “uso no período”: se teve consumo, consideramos ativo
+        if (litros > 0) {
+          statusNorm = "ativo";
+        }
+
+        const status = statusNorm === "ativo" ? "Ativo" : "Inativo";
+
+        // busca coordenadas (cache local)
         const coords = await getCityCoords(pool, m.cidade, m.uf);
 
         return {
@@ -1395,20 +1409,29 @@ app.get("/api/kpis/equipment", async (req, res) => {
       });
     }
 
-    const [activeRows] = await pool.query(
+    // 👉 Agora contamos ativos/inativos pelo campo m.status (0 / 2)
+    const [statusRows] = await pool.query(
       `
-      SELECT DISTINCT inf.maquina_id
-        FROM informacoes inf FORCE INDEX (idx_informacoes_maquina_created)
-       WHERE inf.maquina_id IN (?)
-         AND inf.created_at >= ?
-         AND inf.created_at < DATE_ADD(?, INTERVAL 1 DAY)
+      SELECT m.status
+        FROM maquinas m
+       WHERE m.id IN (?)
       `,
-      [machineIds, fromStr, toStr]
+      [machineIds]
     );
 
-    const ativos = activeRows.length;
-    const total = machineIds.length;
-    const inativos = Math.max(total - ativos, 0);
+    let ativos = 0;
+    let inativos = 0;
+
+    for (const r of statusRows || []) {
+      const s = Number(r.status);
+      if (s === 0) {
+        ativos++;
+      } else if (s === 2) {
+        inativos++;
+      }
+    }
+
+    const total = statusRows.length;
 
     res.json({
       total_equipamentos: total,
@@ -1453,33 +1476,38 @@ app.get("/api/location/kpis", async (req, res) => {
       });
     }
 
+    // Quantidade de localizações (cidades)
     const [locRows] = await pool.query(
       `
       SELECT COUNT(DISTINCT m.cidade_id) AS qtd
-      FROM maquinas m
-      WHERE m.id IN (?)
+        FROM maquinas m
+       WHERE m.id IN (?)
       `,
       [machineIds]
     );
     const users_total = Number(locRows?.[0]?.qtd || 0);
 
-    const [activeRows] = await pool.query(
+    // Conta ativos/inativos pelo campo m.status (0 = Ativo, 2 = Inativo)
+    const [statusRows] = await pool.query(
       `
-      SELECT DISTINCT inf.maquina_id
-        FROM informacoes inf FORCE INDEX (idx_informacoes_maquina_created)
-       WHERE inf.maquina_id IN (?)
-         AND inf.created_at >= ?
-         AND inf.created_at < DATE_ADD(?, INTERVAL 1 DAY)
+      SELECT m.status
+        FROM maquinas m
+       WHERE m.id IN (?)
       `,
-      [machineIds, fromStr, toStr]
-    );
-    const ativosSet = new Set(
-      (activeRows || []).map((r) => r.maquina_id).filter(Boolean)
+      [machineIds]
     );
 
-    const equipamentos_ativos = ativosSet.size;
-    const totalEquip = machineIds.length;
-    const equipamentos_inativos = Math.max(totalEquip - equipamentos_ativos, 0);
+    let equipamentos_ativos = 0;
+    let equipamentos_inativos = 0;
+
+    for (const r of statusRows || []) {
+      const s = Number(r.status);
+      if (s === 0) {
+        equipamentos_ativos++;
+      } else if (s === 2) {
+        equipamentos_inativos++;
+      }
+    }
 
     res.json({
       users_total,

@@ -104,17 +104,25 @@ export function DateRangePicker({ value, onChange }: DateRangePickerProps) {
       <PopoverTrigger asChild>
         <Button
           variant="outline"
-          className={cn("justify-start text-left font-normal rounded-xl")}
-          onClick={() => setOpen(true)}
+          className={cn(
+            // tamanho e formato
+            "h-11 w-full rounded-full px-5 flex items-center gap-2 justify-center",
+            "text-sm font-medium bg-white border border-border",
+            // hover azul #1105f2
+            "hover:bg-[#1105f2] hover:text-white hover:border-[#1105f2]",
+            "transition-all duration-200",
+            // estilo quando não há valor
+            !value && "text-muted-foreground"
+          )}
         >
-          <CalendarIcon className="mr-2 h-4 w-4" />
+          <CalendarIcon className="mr-5 h-4 w-4" />
           {pretty}
         </Button>
       </PopoverTrigger>
 
       <PopoverContent
         className="w-auto p-0"
-        align="end"
+        align="start"
         onOpenAutoFocus={(e) => e.preventDefault()}
         onCloseAutoFocus={(e) => e.preventDefault()}
         onInteractOutside={(e) => e.preventDefault()} // nunca fecha “sem querer”

@@ -47,7 +47,7 @@ export function FilterBar({
   }, [options]);
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-4 p-6 bg-card rounded-2xl border border-border shadow-sm">
+    <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-4 p-6 bg-card rounded-2xl border border-border shadow-sm">
       {/* Usuário */}
       <Select
         value={filters.usuario?.toString()}
@@ -120,7 +120,7 @@ export function FilterBar({
         </SelectContent>
       </Select>
 
-      {/* Nº de Série */}
+      {/* Nº de Série *
       <Select
         value={filters.serie}
         onValueChange={(value) =>
@@ -139,7 +139,7 @@ export function FilterBar({
             </SelectItem>
           ))}
         </SelectContent>
-      </Select>
+      </Select>*/}
 
       {/* Status */}
       <Select
@@ -156,7 +156,7 @@ export function FilterBar({
           <SelectValue placeholder="Status" />
         </SelectTrigger>
         <SelectContent>
-          <SelectItem value="all">Todos</SelectItem>
+          <SelectItem value="all">Status</SelectItem>
           <SelectItem value="0">Ativos</SelectItem>
           <SelectItem value="2">Inativos</SelectItem>
         </SelectContent>
