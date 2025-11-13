@@ -63,7 +63,7 @@ export function FilterBar({
           <SelectValue placeholder="Usuário" />
         </SelectTrigger>
         <SelectContent>
-          <SelectItem value="all">Todos</SelectItem>
+          <SelectItem value="all"></SelectItem>
           {opts.usuarios.map((u) => (
             <SelectItem key={u.value} value={u.value.toString()}>
               {u.label}
