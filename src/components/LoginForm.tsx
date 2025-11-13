@@ -44,9 +44,13 @@ export function LoginForm({ onLoginSuccess }: LoginFormProps) {
     <div className="min-h-screen flex items-center justify-center bg-background px-4">
       <Card className="w-full max-w-md p-8 rounded-2xl shadow-lg border border-border space-y-6">
         <div className="flex flex-col items-center gap-2">
-          <div className="h-12 w-12 rounded-2xl bg-primary flex items-center justify-center">
+          <div className="h-24 w-24 rounded-2xl flex items-center justify-center">
             <span className="text-primary-foreground font-bold text-xl">
-              IH
+              <img
+                src="/Icehot_Logo_FundoBranco.png"
+                alt="Icehot"
+                className="h-24 md:h-28 lg:h-32 w-auto object-contain drop-shadow-sm"
+              />
             </span>
           </div>
           <h1 className="text-2xl font-bold">Icehot Dashboard</h1>
