@@ -1,11 +1,13 @@
 const mysql = require("mysql2");
 
-// ===== Leitura robusta das variáveis de ambiente =====
-const DB_HOST = process.env.DB_HOST || process.env.MYSQL_HOST || "127.0.0.1";
-const DB_USER = process.env.DB_USER || process.env.MYSQL_USER || "root";
-const DB_PASSWORD = process.env.DB_PASSWORD || process.env.MYSQL_PASSWORD || "";
-const DB_NAME = process.env.DB_NAME || process.env.MYSQL_DATABASE || "icehot";
-const DB_PORT = Number(process.env.DB_PORT || process.env.MYSQL_PORT || 3306);
+// ===== Config fixa do MySQL (DigitalOcean) =====
+// (depois a gente volta isso para env vars com calma)
+
+const DB_HOST = "167.99.0.137";
+const DB_USER = "root";
+const DB_PASSWORD = "!Root@568f74e2b304";
+const DB_NAME = "icehot";
+const DB_PORT = 3306;
 
 // Log seguro (sem senha) para confirmar no Cloud Run
 console.log("[DB CONFIG]", {
@@ -15,7 +17,7 @@ console.log("[DB CONFIG]", {
   port: DB_PORT,
 });
 
-// ===== Cria pool usando as envs acima =====
+// ===== Cria pool usando as configs acima =====
 const pool = mysql
   .createPool({
     host: DB_HOST,
@@ -29,7 +31,6 @@ const pool = mysql
   })
   .promise();
 
-// opcional: exporta a config pra endpoint de debug (se quiser usar)
 function getDbConfigPublic() {
   return {
     host: DB_HOST,

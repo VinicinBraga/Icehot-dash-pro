@@ -4,16 +4,25 @@ const path = require("path");
 require("dotenv").config({ path: path.join(__dirname, ".env") });
 const { pool } = require("./db.cjs");
 const jwt = require("jsonwebtoken");
+const JWT_SECRET =
+  process.env.JWT_SECRET || "icehot-dashboard-super-secret-2025";
 const bcrypt = require("bcryptjs");
 const app = express();
 const fetch = require("node-fetch");
+const {
+  getKpisFromBigQuery,
+  getLitersByMachineFromBigQuery,
+  getWaterSeriesFromBigQuery,
+  getTriggerSeriesFromBigQuery,
+  getEquipmentAggregatesFromBigQuery,
+} = require("./bigquery");
 
 const MASTER_EMAILS = [
   "contato@icehot.net.br",
   "contato@devontecnologia.com.br",
 ];
+
 /* --------------------------- CORS --------------------------- */
-// Em dev: libera geral. Em produção: ajuste os domínios.
 const ENV_ORIGINS = (process.env.ALLOWED_ORIGINS || "")
   .split(",")
   .map((s) => s.trim())
@@ -28,7 +37,6 @@ const ALLOWED_ORIGINS = [
   "http://127.0.0.1:8080",
 ];
 
-// Middleware global que já responde o preflight ANTES do auth
 app.use((req, res, next) => {
   const origin = req.headers.origin;
   if (origin && ALLOWED_ORIGINS.includes(origin)) {
@@ -46,8 +54,6 @@ app.use((req, res, next) => {
   }
   next();
 });
-
-// Responder preflight sem exigir auth
 
 app.use(express.json());
 
@@ -71,9 +77,7 @@ function signToken(user) {
     isMaster,
   };
 
-  return jwt.sign(payload, process.env.JWT_SECRET, {
-    expiresIn: process.env.JWT_EXPIRES_IN || "7d",
-  });
+  return jwt.sign(payload, JWT_SECRET, { expiresIn: "7d" });
 }
 
 // máquinas do usuário (ou todas, se master)
@@ -94,6 +98,7 @@ async function getUserMachineIds(email, isMaster = false) {
   );
   return machinesRows.map((r) => r.maquina_id);
 }
+
 // ===== Helper: pega coordenadas reais da cidade e guarda cache no MySQL =====
 const removeDiacritics = (s = "") =>
   s.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
@@ -104,24 +109,21 @@ function normalizeCityUf(cidadeRaw, ufRaw) {
     .trim()
     .toUpperCase();
 
-  // chave sem acento e sem múltiplos espaços
   const cidadeSlim = removeDiacritics(cidade).replace(/\s+/g, " ");
   return {
-    cidade, // mantém original p/ exibir
-    uf, // UF em maiúsculo
-    keyCidade: cidadeSlim.toLowerCase(), // p/ comparar/buscar
+    cidade,
+    uf,
+    keyCidade: cidadeSlim.toLowerCase(),
   };
 }
 
 async function getCityCoords(pool, cidadeRaw, ufRaw) {
   const { cidade, uf, keyCidade } = normalizeCityUf(cidadeRaw, ufRaw);
 
-  // sem cidade/UF → sem coordenada (deixa null para não “forçar” centro do BR)
   if (!cidade || !uf) {
     return { lat: null, lng: null, source: "missing" };
   }
 
-  // 1) cache exato
   const [hit1] = await pool.query(
     "SELECT lat, lng FROM city_coords WHERE cidade = ? AND uf = ? LIMIT 1",
     [cidade, uf]
@@ -134,7 +136,6 @@ async function getCityCoords(pool, cidadeRaw, ufRaw) {
     };
   }
 
-  // 2) cache “normalizado” (sem acentos / minúsculas)
   const [hit2] = await pool.query(
     `SELECT lat, lng
        FROM city_coords
@@ -151,7 +152,6 @@ async function getCityCoords(pool, cidadeRaw, ufRaw) {
     };
   }
 
-  // 3) não chama Nominatim aqui; deixa faltando para semear depois
   return { lat: null, lng: null, source: "missing" };
 }
 
@@ -186,7 +186,6 @@ async function resolveMachineIds(userEmail, q = {}, isMaster = false) {
 
   if (!baseIds.length) return [];
 
-  // atalho: equipamento específico
   if (equipamento) {
     return baseIds.includes(equipamento) ? [equipamento] : [];
   }
@@ -205,7 +204,6 @@ async function resolveMachineIds(userEmail, q = {}, isMaster = false) {
   }
 
   if (usuario) {
-    // mantém: filtra por relação com usuarios_equipamentos
     where.push(`EXISTS (
       SELECT 1 FROM usuarios_equipamentos ue
       WHERE ue.usuario_id = ? AND ue.maquina_id = m.id
@@ -213,7 +211,6 @@ async function resolveMachineIds(userEmail, q = {}, isMaster = false) {
     params.push(usuario);
   }
 
-  // status especial Ativo/Inativo baseado em leituras
   if (status) {
     const s = String(status).trim().toLowerCase();
 
@@ -253,7 +250,6 @@ async function resolveMachineIds(userEmail, q = {}, isMaster = false) {
       if (!baseIds.length) return [];
       params[0] = baseIds;
     } else {
-      // status textual do campo m.status
       where.push(`LOWER(TRIM(m.status)) = ?`);
       params.push(s);
     }
@@ -267,15 +263,12 @@ async function resolveMachineIds(userEmail, q = {}, isMaster = false) {
 }
 
 const PUBLIC_PATHS = new Set(["/api/_debug/ping", "/api/health"]);
+
 /* ---------------------- Middleware Auth JWT ---------------------- */
 
 app.use((req, res, next) => {
-  // preflight NUNCA exige autenticação
   if (req.method === "OPTIONS") return res.sendStatus(204);
-  // rotas públicas
   if (PUBLIC_PATHS.has(req.path)) return next();
-
-  // login aberto
   if (req.path === "/api/auth/login") return next();
 
   const auth = req.header("authorization");
@@ -284,7 +277,7 @@ app.use((req, res, next) => {
   if (auth && auth.startsWith("Bearer ")) {
     const token = auth.slice(7);
     try {
-      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+      const decoded = jwt.verify(token, JWT_SECRET);
       req.userId = decoded.id;
       req.userEmail = decoded.email;
       req.isMaster = !!decoded.isMaster || isMasterEmail(decoded.email);
@@ -384,27 +377,23 @@ app.get("/api/health", async (req, res) => {
 
 app.get("/api/kpis", async (req, res) => {
   try {
-    const userEmail = req.userEmail;
-    const { from, to } = req.query;
+    // Usa o email vindo do JWT (middleware de auth já preenche req.userEmail)
+    const userEmail = req.userEmail || req.header("x-user-email") || null;
+    const { from, to } = req.query; // esperado YYYY-MM-DD
 
-    // intervalo padrão: últimos 30 dias
+    // datas padrão (últimos 30 dias)
     const defaultTo = new Date();
     const defaultFrom = new Date();
     defaultFrom.setDate(defaultFrom.getDate() - 30);
 
     const toStr =
-      to && typeof to === "string" ? to : defaultTo.toISOString().slice(0, 10);
+      typeof to === "string" && to ? to : defaultTo.toISOString().slice(0, 10);
     const fromStr =
-      from && typeof from === "string"
+      typeof from === "string" && from
         ? from
         : defaultFrom.toISOString().slice(0, 10);
 
-    // to + 1 dia para fazer o BETWEEN [from, to+1)
-    const toPlus1 = new Date(toStr);
-    toPlus1.setDate(toPlus1.getDate() + 1);
-    const toPlus1Str = toPlus1.toISOString().slice(0, 10);
-
-    // máquinas visíveis para o usuário (ou todas, se master)
+    // 1) Descobre as máquinas visíveis para esse usuário (ou todas, se master)
     const machineIds = await resolveMachineIds(
       userEmail,
       req.query,
@@ -422,117 +411,43 @@ app.get("/api/kpis", async (req, res) => {
       });
     }
 
-    // === MESMA IDEIA DO BQ: LAG POR DIA/MÁQUINA ===
-    const [rows] = await pool.query(
-      `
-      WITH base AS (
-        SELECT
-          inf.maquina_id,
-          -- data “local” (pode ajustar o fuso se quiser, aqui deixei direto)
-          DATE(inf.created_at) AS event_date,
-          -- vazões
-          CAST(COALESCE(NULLIF(inf.vazao_agua_fria,   ''), '0') AS DOUBLE) AS v_fria,
-          CAST(COALESCE(NULLIF(inf.vazao_agua_quente, ''), '0') AS DOUBLE) AS v_quente,
-          CAST(COALESCE(NULLIF(inf.vazao_agua_pet,    ''), '0') AS DOUBLE) AS v_pet,
-          -- contadores de acionamento
-          CAST(COALESCE(NULLIF(inf.contador_acionamentos_agua_fria,   ''), '0') AS DOUBLE) AS c_fria,
-          CAST(COALESCE(NULLIF(inf.contador_acionamentos_agua_quente, ''), '0') AS DOUBLE) AS c_quente,
-          CAST(COALESCE(NULLIF(inf.contador_acionamentos_agua_pet,    ''), '0') AS DOUBLE) AS c_pet,
-          CAST(COALESCE(NULLIF(inf.contador_acionamentos_aspersor,    ''), '0') AS DOUBLE) AS c_asp,
-          inf.created_at AS created_at_ts,
-          inf.id
-        FROM informacoes inf FORCE INDEX (idx_informacoes_maquina_created)
-        WHERE inf.maquina_id IN (?)
-          AND inf.created_at >= ?
-          AND inf.created_at < ?
-      ),
-      deltas AS (
-        SELECT
-          maquina_id,
-          event_date,
-          -- litros: delta positivo por linha, por máquina (sem reset diário)
-          GREATEST(
-            0,
-            v_fria - LAG(v_fria) OVER (
-              PARTITION BY maquina_id
-              ORDER BY created_at_ts, id
-            )
-          ) AS d_v_fria,
-          GREATEST(
-            0,
-            v_quente - LAG(v_quente) OVER (
-              PARTITION BY maquina_id
-              ORDER BY created_at_ts, id
-            )
-          ) AS d_v_quente,
-          GREATEST(
-            0,
-            v_pet - LAG(v_pet) OVER (
-              PARTITION BY maquina_id
-              ORDER BY created_at_ts, id
-            )
-          ) AS d_v_pet,
-          -- acionamentos
-          GREATEST(
-            0,
-            c_fria - LAG(c_fria) OVER (
-              PARTITION BY maquina_id
-              ORDER BY created_at_ts, id
-            )
-          ) AS d_c_fria,
-          GREATEST(
-            0,
-            c_quente - LAG(c_quente) OVER (
-              PARTITION BY maquina_id
-              ORDER BY created_at_ts, id
-            )
-          ) AS d_c_quente,
-          GREATEST(
-            0,
-            c_pet - LAG(c_pet) OVER (
-              PARTITION BY maquina_id
-              ORDER BY created_at_ts, id
-            )
-          ) AS d_c_pet,
-          GREATEST(
-            0,
-            c_asp - LAG(c_asp) OVER (
-              PARTITION BY maquina_id
-              ORDER BY created_at_ts, id
-            )
-          ) AS d_c_asp
-        FROM base
-      )
-      SELECT
-        SUM(d_v_fria)   AS sum_v_fria,
-        SUM(d_v_quente) AS sum_v_quente,
-        SUM(d_v_pet)    AS sum_v_pet,
-        SUM(d_c_fria)   AS sum_c_fria,
-        SUM(d_c_quente) AS sum_c_quente,
-        SUM(d_c_pet)    AS sum_c_pet,
-        SUM(d_c_asp)    AS sum_c_asp
-      FROM deltas
-      `,
-      [machineIds, fromStr, toPlus1Str]
-    );
+    // 2) Agora buscamos os KPIs no BigQuery
+    const row = await getKpisFromBigQuery(machineIds, fromStr, toStr);
 
-    const row = rows[0] || {};
+    const sum_v_fria = Number(row?.sum_v_fria || 0);
+    const sum_v_quente = Number(row?.sum_v_quente || 0);
+    const sum_v_pet = Number(row?.sum_v_pet || 0);
 
-    // aplica o mesmo SCALE de litros que usamos no BQ
-    const litros_fria = Number(row.sum_v_fria || 0) * LITERS_SCALE;
-    const litros_quente = Number(row.sum_v_quente || 0) * LITERS_SCALE;
-    const litros_pets = Number(row.sum_v_pet || 0) * LITERS_SCALE;
+    const sum_c_fria = Number(row?.sum_c_fria || 0);
+    const sum_c_quente = Number(row?.sum_c_quente || 0);
+    const sum_c_pet = Number(row?.sum_c_pet || 0);
+    const sum_c_asp = Number(row?.sum_c_asp || 0);
+
+    // Aqui JÁ são litros/dia prontos no BQ (não aplica LITERS_SCALE)
+    const litros_fria = sum_v_fria;
+    const litros_quente = sum_v_quente;
+    const litros_pets = sum_v_pet;
     const litros_total = litros_fria + litros_quente + litros_pets;
 
-    const trg_fria = Number(row.sum_c_fria || 0);
-    const trg_quente = Number(row.sum_c_quente || 0);
-    const trg_pets = Number(row.sum_c_pet || 0);
-    const trg_aspersor = Number(row.sum_c_asp || 0);
+    const trg_fria = sum_c_fria;
+    const trg_quente = sum_c_quente;
+    const trg_pets = sum_c_pet;
+    const trg_aspersor = sum_c_asp;
     const trg_total = trg_fria + trg_quente + trg_pets + trg_aspersor;
 
     const equipamentos_utilizados = machineIds.length;
+
     const garrafas_poupadas = litros_total / BOTTLE_LITERS;
     const co2_poupado_m3 = litros_total * CO2_PER_LITER_M3;
+
+    // Debug leve pra gente ver no log se algo vier zerado
+    console.log("KPIs BQ debug:", {
+      email: userEmail,
+      fromStr,
+      toStr,
+      machineIds,
+      row,
+    });
 
     return res.json({
       water: {
@@ -559,7 +474,8 @@ app.get("/api/kpis", async (req, res) => {
   }
 });
 
-// ===== Localização (mapa - por equipamento, alinhado com KPIs) =====
+/* ===== Localização (mapa - por equipamento, alinhado com KPIs) ===== */
+
 app.get("/api/localizacao", async (req, res) => {
   try {
     const userEmail = req.userEmail || req.header("x-user-email");
@@ -581,11 +497,6 @@ app.get("/api/localizacao", async (req, res) => {
         ? from
         : defaultFrom.toISOString().slice(0, 10);
 
-    // [from, to+1)
-    const toPlus1 = new Date(toStr);
-    toPlus1.setDate(toPlus1.getDate() + 1);
-    const toPlus1Str = toPlus1.toISOString().slice(0, 10);
-
     // máquinas visíveis (usuário normal ou master, com filtros)
     const machineIds = await resolveMachineIds(
       userEmail,
@@ -600,53 +511,22 @@ app.get("/api/localizacao", async (req, res) => {
       });
     }
 
-    // 1) calcula litros por máquina usando a MESMA lógica do /api/kpis
-    const perMachineDeltaSql = `
-      SELECT
-        DATE(inf.created_at) AS d,
-        GREATEST(
-          (MAX(COALESCE(NULLIF(inf.vazao_agua_fria,   ''), '0') + 0) -
-           MIN(COALESCE(NULLIF(inf.vazao_agua_fria,   ''), '0') + 0)), 0
-        ) AS water_fria_delta,
-        GREATEST(
-          (MAX(COALESCE(NULLIF(inf.vazao_agua_quente, ''), '0') + 0) -
-           MIN(COALESCE(NULLIF(inf.vazao_agua_quente, ''), '0') + 0)), 0
-        ) AS water_quente_delta,
-        GREATEST(
-          (MAX(COALESCE(NULLIF(inf.vazao_agua_pet,    ''), '0') + 0) -
-           MIN(COALESCE(NULLIF(inf.vazao_agua_pet,    ''), '0') + 0)), 0
-        ) AS water_pets_delta
-      FROM informacoes inf FORCE INDEX (idx_informacoes_maquina_created)
-      WHERE inf.maquina_id = ?
-        AND inf.created_at >= ?
-        AND inf.created_at < ?
-      GROUP BY d
-    `;
-
-    const litersByMachine = new Map();
-
-    await Promise.all(
-      machineIds.map(async (mid) => {
-        const [rows] = await pool.query(perMachineDeltaSql, [
-          mid,
-          fromStr,
-          toPlus1Str,
-        ]);
-
-        let sum = 0;
-        for (const r of rows || []) {
-          const fria = Number(r.water_fria_delta || 0);
-          const quente = Number(r.water_quente_delta || 0);
-          const pets = Number(r.water_pets_delta || 0);
-          sum += fria + quente + pets;
-        }
-
-        const litros = sum * LITERS_SCALE;
-        litersByMachine.set(mid, litros);
-      })
+    // 1) Litros por máquina via BigQuery (já agregado por dia no fato)
+    const litersRows = await getLitersByMachineFromBigQuery(
+      machineIds,
+      fromStr,
+      toStr
     );
 
-    // 2) busca metadados das máquinas (cidade/UF, nome, status)
+    // Mapa: maquina_id -> litros no período
+    const litersByMachine = new Map();
+    for (const r of litersRows || []) {
+      const mid = Number(r.maquina_id);
+      const litros = Number(r.litros || 0);
+      litersByMachine.set(mid, litros);
+    }
+
+    // 2) Metadados das máquinas (cidade/UF, nome, status) via MySQL
     const [machines] = await pool.query(
       `
       SELECT
@@ -662,7 +542,7 @@ app.get("/api/localizacao", async (req, res) => {
       [machineIds]
     );
 
-    // 3) monta os pontos que o MapView usa
+    // 3) Monta os pontos para o mapa
     const points = await Promise.all(
       (machines || []).map(async (m) => {
         const litros = Number(litersByMachine.get(m.id) || 0);
@@ -684,7 +564,7 @@ app.get("/api/localizacao", async (req, res) => {
 
         const status = statusNorm === "ativo" ? "Ativo" : "Inativo";
 
-        // busca coordenadas (cache local)
+        // busca coordenadas (cache local no MySQL)
         const coords = await getCityCoords(pool, m.cidade, m.uf);
 
         return {
@@ -714,21 +594,28 @@ app.get("/api/localizacao", async (req, res) => {
 
 app.get("/api/series/water", async (req, res) => {
   try {
-    const userEmail = req.userEmail;
+    const userEmail = req.userEmail || req.header("x-user-email");
     const { from, to } = req.query;
 
+    // Período padrão = últimos 6 meses
     const defaultTo = new Date();
     const defaultFrom = new Date();
     defaultFrom.setMonth(defaultFrom.getMonth() - 5);
 
-    const toStr = to || defaultTo.toISOString().slice(0, 10);
-    const fromStr = from || defaultFrom.toISOString().slice(0, 10);
+    const toStr =
+      typeof to === "string" && to ? to : defaultTo.toISOString().slice(0, 10);
+    const fromStr =
+      typeof from === "string" && from
+        ? from
+        : defaultFrom.toISOString().slice(0, 10);
 
+    // 1) máquinas visíveis ao usuário
     const machineIds = await resolveMachineIds(
       userEmail,
       req.query,
       req.isMaster
     );
+
     if (!machineIds.length) {
       return res.json({
         labels: [],
@@ -742,70 +629,51 @@ app.get("/api/series/water", async (req, res) => {
       });
     }
 
-    const [rows] = await pool.query(
-      `
-      SELECT
-        DATE_FORMAT(dia, '%Y-%m') AS ym,
-        SUM(w_fria)   AS fria,
-        SUM(w_quente) AS quente,
-        SUM(w_pets)   AS pets
-      FROM (
-        SELECT
-          DATE(inf.created_at) AS dia,
-          GREATEST(
-            (MAX(COALESCE(NULLIF(inf.vazao_agua_fria, ''), '0') + 0) -
-             MIN(COALESCE(NULLIF(inf.vazao_agua_fria, ''), '0') + 0)), 0
-          ) AS w_fria,
-          GREATEST(
-            (MAX(COALESCE(NULLIF(inf.vazao_agua_quente, ''), '0') + 0) -
-             MIN(COALESCE(NULLIF(inf.vazao_agua_quente, ''), '0') + 0)), 0
-          ) AS w_quente,
-          GREATEST(
-            (MAX(COALESCE(NULLIF(inf.vazao_agua_pet, ''), '0') + 0) -
-             MIN(COALESCE(NULLIF(inf.vazao_agua_pet, ''), '0') + 0)), 0
-          ) AS w_pets
-        FROM informacoes inf FORCE INDEX (idx_informacoes_maquina_created)
-        WHERE inf.maquina_id IN (?)
-          AND inf.created_at >= ?
-          AND inf.created_at < DATE_ADD(?, INTERVAL 1 DAY)
-        GROUP BY dia, inf.maquina_id
-      ) d
-      GROUP BY ym
-      ORDER BY ym
-      `,
-      [machineIds, fromStr, toStr]
-    );
+    // 2) Busca no BigQuery (já agrupa por mês e preenche com zeros)
+    const rows = await getWaterSeriesFromBigQuery(machineIds, fromStr, toStr);
 
+    // 3) Monta labels (meses)
     const labels = rows.map((r) => {
       const [y, m] = r.ym.split("-");
       const dt = new Date(Number(y), Number(m) - 1, 1);
-      return dt.toLocaleString("pt-BR", { month: "short" }).replace(".", "");
+      return dt
+        .toLocaleDateString("pt-BR", { month: "short" })
+        .replace(".", "");
     });
 
+    // 4) Monta séries
     const series = [
       {
         key: "total",
         values: rows.map(
           (r) =>
-            (Number(r.fria || 0) +
-              Number(r.quente || 0) +
-              Number(r.pets || 0)) *
-            LITERS_SCALE
+            Number(r.sum_v_fria || 0) +
+            Number(r.sum_v_quente || 0) +
+            Number(r.sum_v_pet || 0)
         ),
       },
       {
         key: "fria",
-        values: rows.map((r) => Number(r.fria || 0) * LITERS_SCALE),
+        values: rows.map((r) => Number(r.sum_v_fria || 0)),
       },
       {
         key: "quente",
-        values: rows.map((r) => Number(r.quente || 0) * LITERS_SCALE),
+        values: rows.map((r) => Number(r.sum_v_quente || 0)),
       },
       {
         key: "pets",
-        values: rows.map((r) => Number(r.pets || 0) * LITERS_SCALE),
+        values: rows.map((r) => Number(r.sum_v_pet || 0)),
       },
     ];
+
+    // Debug
+    console.log("Water Series BQ:", {
+      email: userEmail,
+      machineIds,
+      fromStr,
+      toStr,
+      rows,
+    });
 
     res.json({
       labels,
@@ -813,28 +681,35 @@ app.get("/api/series/water", async (req, res) => {
       _period: { from: fromStr, to: toStr, email: userEmail },
     });
   } catch (e) {
-    console.error(e);
+    console.error("Erro em /api/series/water:", e);
     res.status(500).json({ error: String(e) });
   }
 });
 
 app.get("/api/series/triggers", async (req, res) => {
   try {
-    const userEmail = req.userEmail;
+    const userEmail = req.userEmail || req.header("x-user-email");
     const { from, to } = req.query;
 
+    // Período padrão – últimos 6 meses
     const defaultTo = new Date();
     const defaultFrom = new Date();
     defaultFrom.setMonth(defaultFrom.getMonth() - 5);
 
-    const toStr = to || defaultTo.toISOString().slice(0, 10);
-    const fromStr = from || defaultFrom.toISOString().slice(0, 10);
+    const toStr =
+      typeof to === "string" && to ? to : defaultTo.toISOString().slice(0, 10);
+    const fromStr =
+      typeof from === "string" && from
+        ? from
+        : defaultFrom.toISOString().slice(0, 10);
 
+    // 1) máquinas visíveis ao usuário
     const machineIds = await resolveMachineIds(
       userEmail,
       req.query,
       req.isMaster
     );
+
     if (!machineIds.length) {
       return res.json({
         labels: [],
@@ -849,67 +724,44 @@ app.get("/api/series/triggers", async (req, res) => {
       });
     }
 
-    const [rows] = await pool.query(
-      `
-      SELECT
-        DATE_FORMAT(dia, '%Y-%m') AS ym,
-        SUM(t_fria)     AS fria,
-        SUM(t_quente)   AS quente,
-        SUM(t_pets)     AS pets,
-        SUM(t_aspersor) AS aspersor
-      FROM (
-        SELECT
-          DATE(inf.created_at) AS dia,
-          GREATEST(
-            (MAX(COALESCE(NULLIF(inf.contador_acionamentos_agua_fria, ''), '0') + 0) -
-             MIN(COALESCE(NULLIF(inf.contador_acionamentos_agua_fria, ''), '0') + 0)), 0
-          ) AS t_fria,
-          GREATEST(
-            (MAX(COALESCE(NULLIF(inf.contador_acionamentos_agua_quente, ''), '0') + 0) -
-             MIN(COALESCE(NULLIF(inf.contador_acionamentos_agua_quente, ''), '0') + 0)), 0
-          ) AS t_quente,
-          GREATEST(
-            (MAX(COALESCE(NULLIF(inf.contador_acionamentos_agua_pet, ''), '0') + 0) -
-             MIN(COALESCE(NULLIF(inf.contador_acionamentos_agua_pet, ''), '0') + 0)), 0
-          ) AS t_pets,
-          GREATEST(
-            (MAX(COALESCE(NULLIF(inf.contador_acionamentos_aspersor, ''), '0') + 0) -
-             MIN(COALESCE(NULLIF(inf.contador_acionamentos_aspersor, ''), '0') + 0)), 0
-          ) AS t_aspersor
-        FROM informacoes inf FORCE INDEX (idx_informacoes_maquina_created)
-        WHERE inf.maquina_id IN (?)
-          AND inf.created_at >= ?
-          AND inf.created_at < DATE_ADD(?, INTERVAL 1 DAY)
-        GROUP BY dia, inf.maquina_id
-      ) d
-      GROUP BY ym
-      ORDER BY ym
-      `,
-      [machineIds, fromStr, toStr]
-    );
+    // 2) Busca as séries mensais no BigQuery
+    const rows = await getTriggerSeriesFromBigQuery(machineIds, fromStr, toStr);
 
+    // 3) Labels (mês abreviado: jan, fev, mar…)
     const labels = rows.map((r) => {
       const [y, m] = r.ym.split("-");
       const dt = new Date(Number(y), Number(m) - 1, 1);
-      return dt.toLocaleString("pt-BR", { month: "short" }).replace(".", "");
+      return dt
+        .toLocaleDateString("pt-BR", { month: "short" })
+        .replace(".", "");
     });
 
+    // 4) Séries
     const series = [
       {
         key: "total",
         values: rows.map(
           (r) =>
-            Number(r.fria || 0) +
-            Number(r.quente || 0) +
-            Number(r.pets || 0) +
-            Number(r.aspersor || 0)
+            Number(r.sum_c_fria || 0) +
+            Number(r.sum_c_quente || 0) +
+            Number(r.sum_c_pet || 0) +
+            Number(r.sum_c_asp || 0)
         ),
       },
-      { key: "fria", values: rows.map((r) => Number(r.fria || 0)) },
-      { key: "quente", values: rows.map((r) => Number(r.quente || 0)) },
-      { key: "pets", values: rows.map((r) => Number(r.pets || 0)) },
-      { key: "aspersor", values: rows.map((r) => Number(r.aspersor || 0)) },
+      { key: "fria", values: rows.map((r) => Number(r.sum_c_fria || 0)) },
+      { key: "quente", values: rows.map((r) => Number(r.sum_c_quente || 0)) },
+      { key: "pets", values: rows.map((r) => Number(r.sum_c_pet || 0)) },
+      { key: "aspersor", values: rows.map((r) => Number(r.sum_c_asp || 0)) },
     ];
+
+    // Debug útil
+    console.log("Trigger Series BQ:", {
+      email: userEmail,
+      fromStr,
+      toStr,
+      machineIds,
+      rows,
+    });
 
     res.json({
       labels,
@@ -917,7 +769,7 @@ app.get("/api/series/triggers", async (req, res) => {
       _period: { from: fromStr, to: toStr, email: userEmail },
     });
   } catch (e) {
-    console.error(e);
+    console.error("Erro em /api/series/triggers:", e);
     res.status(500).json({ error: String(e) });
   }
 });
@@ -1118,64 +970,97 @@ app.get("/api/models/pie", async (req, res) => {
     const userEmail = req.userEmail;
     const { from, to } = req.query;
 
+    // Período padrão: últimos 30 dias
     const defaultTo = new Date();
     const defaultFrom = new Date();
     defaultFrom.setDate(defaultFrom.getDate() - 30);
 
-    const toStr = to || defaultTo.toISOString().slice(0, 10);
-    const fromStr = from || defaultFrom.toISOString().slice(0, 10);
+    const toStr =
+      typeof to === "string" && to ? to : defaultTo.toISOString().slice(0, 10);
+    const fromStr =
+      typeof from === "string" && from
+        ? from
+        : defaultFrom.toISOString().slice(0, 10);
 
+    // Máquinas visíveis para o usuário
     const machineIds = await resolveMachineIds(
       userEmail,
       req.query,
       req.isMaster
     );
+
     if (!machineIds.length) {
       return res.json([]);
     }
 
-    const [rows] = await pool.query(
-      `
-      SELECT
-        x.label,
-        SUM(x.delta) AS value
-      FROM (
-        SELECT
-          COALESCE(t.nome, 'Sem Modelo') AS label,
-          GREATEST(
-            (MAX(COALESCE(NULLIF(inf.vazao_agua_fria, ''), '0') + 0) -
-             MIN(COALESCE(NULLIF(inf.vazao_agua_fria, ''), '0') + 0)), 0
-          ) +
-          GREATEST(
-            (MAX(COALESCE(NULLIF(inf.vazao_agua_quente, ''), '0') + 0) -
-             MIN(COALESCE(NULLIF(inf.vazao_agua_quente, ''), '0') + 0)), 0
-          ) +
-          GREATEST(
-            (MAX(COALESCE(NULLIF(inf.vazao_agua_pet, ''), '0') + 0) -
-             MIN(COALESCE(NULLIF(inf.vazao_agua_pet, ''), '0') + 0)), 0
-          ) AS delta
-        FROM informacoes inf FORCE INDEX (idx_informacoes_maquina_created)
-        JOIN maquinas m ON m.id = inf.maquina_id
-        LEFT JOIN tipos t ON t.id = m.tipo_id
-        WHERE inf.maquina_id IN (?)
-          AND inf.created_at >= ?
-          AND inf.created_at < DATE_ADD(?, INTERVAL 1 DAY)
-        GROUP BY DATE(inf.created_at), m.id, label
-      ) x
-      GROUP BY x.label
-      ORDER BY value DESC
-      `,
-      [machineIds, fromStr, toStr]
+    // 1) Busca litros por máquina no BigQuery (somando fria+quente+pet)
+    const aggRows = await getEquipmentAggregatesFromBigQuery(
+      machineIds,
+      fromStr,
+      toStr
     );
 
-    const pie = rows.map((r) => ({
-      label: r.label,
-      value: Number(r.value || 0) * LITERS_SCALE,
-    }));
+    if (!aggRows || !aggRows.length) {
+      return res.json([]);
+    }
 
-    res.json(pie);
+    const litersByMachine = new Map();
+    const idsFromAgg = [];
+
+    for (const r of aggRows) {
+      const id = Number(r.maquina_id);
+      const litros =
+        Number(r.sum_v_fria || 0) +
+        Number(r.sum_v_quente || 0) +
+        Number(r.sum_v_pet || 0);
+
+      litersByMachine.set(id, litros);
+      idsFromAgg.push(id);
+    }
+
+    if (!idsFromAgg.length) {
+      return res.json([]);
+    }
+
+    // 2) Busca o modelo (tipo) de cada máquina no MySQL
+    const [machines] = await pool.query(
+      `
+      SELECT
+        m.id,
+        COALESCE(NULLIF(t.nome, ''), 'Sem Modelo') AS modelo
+      FROM maquinas m
+      LEFT JOIN tipos t ON t.id = m.tipo_id
+      WHERE m.id IN (?)
+      `,
+      [idsFromAgg]
+    );
+
+    // 3) Agrega litros por modelo
+    const litersByModel = new Map();
+
+    for (const m of machines || []) {
+      const id = Number(m.id);
+      const modelo = m.modelo || "Sem Modelo";
+      const litros = litersByMachine.get(id) || 0;
+
+      if (!litersByModel.has(modelo)) {
+        litersByModel.set(modelo, 0);
+      }
+      litersByModel.set(modelo, litersByModel.get(modelo) + litros);
+    }
+
+    // 4) Monta o array para o pie (label, value), só modelos com > 0 litros
+    const pie = Array.from(litersByModel.entries())
+      .map(([label, value]) => ({
+        label,
+        value: Number(value || 0),
+      }))
+      .filter((item) => item.value > 0)
+      .sort((a, b) => b.value - a.value);
+
+    return res.json(pie);
   } catch (e) {
-    console.error(e);
+    console.error("Erro em /api/models/pie:", e);
     res.status(500).json({ error: String(e) });
   }
 });
@@ -1191,14 +1076,20 @@ app.get("/api/tables/water-by-equipment", async (req, res) => {
     const defaultFrom = new Date();
     defaultFrom.setDate(defaultFrom.getDate() - 30);
 
-    const toStr = to || defaultTo.toISOString().slice(0, 10);
-    const fromStr = from || defaultFrom.toISOString().slice(0, 10);
+    const toStr =
+      typeof to === "string" && to ? to : defaultTo.toISOString().slice(0, 10);
+    const fromStr =
+      typeof from === "string" && from
+        ? from
+        : defaultFrom.toISOString().slice(0, 10);
 
+    // máquinas visíveis para o usuário
     const machineIds = await resolveMachineIds(
       userEmail,
       req.query,
       req.isMaster
     );
+
     if (!machineIds.length) {
       return res.json({
         columns: ["Equipamento", "Litros"],
@@ -1208,47 +1099,66 @@ app.get("/api/tables/water-by-equipment", async (req, res) => {
       });
     }
 
-    const [rows] = await pool.query(
-      `
-      SELECT
-        x.equipamento_id,
-        x.equipamento,
-        SUM(x.delta) AS litros
-      FROM (
-        SELECT
-          m.id AS equipamento_id,
-          COALESCE(NULLIF(m.nome,''), CONCAT('EQP-', m.id)) AS equipamento,
-          GREATEST(
-            (MAX(COALESCE(NULLIF(inf.vazao_agua_fria, ''), '0') + 0) -
-             MIN(COALESCE(NULLIF(inf.vazao_agua_fria, ''), '0') + 0)), 0
-          ) +
-          GREATEST(
-            (MAX(COALESCE(NULLIF(inf.vazao_agua_quente, ''), '0') + 0) -
-             MIN(COALESCE(NULLIF(inf.vazao_agua_quente, ''), '0') + 0)), 0
-          ) +
-          GREATEST(
-            (MAX(COALESCE(NULLIF(inf.vazao_agua_pet, ''), '0') + 0) -
-             MIN(COALESCE(NULLIF(inf.vazao_agua_pet, ''), '0') + 0)), 0
-          ) AS delta
-        FROM informacoes inf FORCE INDEX (idx_informacoes_maquina_created)
-        JOIN maquinas m ON m.id = inf.maquina_id
-        WHERE inf.maquina_id IN (?)
-          AND inf.created_at >= ?
-          AND inf.created_at < DATE_ADD(?, INTERVAL 1 DAY)
-        GROUP BY DATE(inf.created_at), m.id, equipamento
-      ) x
-      GROUP BY x.equipamento_id, x.equipamento
-      ORDER BY litros DESC
-      `,
-      [machineIds, fromStr, toStr]
+    // 1) Busca litros por máquina no BigQuery (já em litros/dia, somados por período)
+    const aggRows = await getEquipmentAggregatesFromBigQuery(
+      machineIds,
+      fromStr,
+      toStr
     );
 
+    if (!aggRows || !aggRows.length) {
+      return res.json({
+        columns: ["Equipamento", "Litros"],
+        rows: [],
+        total: 0,
+        _period: { from: fromStr, to: toStr, email: userEmail },
+      });
+    }
+
+    // 2) Mapeia litros totais por máquina
+    const litersByMachine = new Map();
+    const idsFromAgg = [];
+
+    for (const r of aggRows) {
+      const id = Number(r.maquina_id);
+      const litros =
+        Number(r.sum_v_fria || 0) +
+        Number(r.sum_v_quente || 0) +
+        Number(r.sum_v_pet || 0);
+
+      litersByMachine.set(id, litros);
+      idsFromAgg.push(id);
+    }
+
+    // 3) Busca nomes dos equipamentos no MySQL
+    const [machines] = await pool.query(
+      `
+      SELECT
+        m.id,
+        COALESCE(NULLIF(m.nome,''), CONCAT('EQP-', m.id)) AS equipamento
+      FROM maquinas m
+      WHERE m.id IN (?)
+      `,
+      [idsFromAgg]
+    );
+
+    const nameById = new Map();
+    for (const m of machines || []) {
+      nameById.set(Number(m.id), m.equipamento);
+    }
+
+    // 4) Monta linhas da tabela e ordena por litros desc
+    const tableRows = idsFromAgg
+      .map((id) => {
+        const nome = nameById.get(id) || `EQP-${id}`;
+        const litros = litersByMachine.get(id) || 0;
+        return [String(nome), litros];
+      })
+      .filter((row) => row[1] > 0) // só mostra quem teve consumo
+      .sort((a, b) => Number(b[1]) - Number(a[1]));
+
     const columns = ["Equipamento", "Litros"];
-    const tableRows = rows.map((r) => [
-      String(r.equipamento),
-      Number(r.litros || 0) * LITERS_SCALE,
-    ]);
-    const total = rows.length;
+    const total = tableRows.length;
 
     res.json({
       columns,
@@ -1257,7 +1167,7 @@ app.get("/api/tables/water-by-equipment", async (req, res) => {
       _period: { from: fromStr, to: toStr, email: userEmail },
     });
   } catch (e) {
-    console.error(e);
+    console.error("Erro em /api/tables/water-by-equipment:", e);
     res.status(500).json({ error: String(e) });
   }
 });
@@ -1305,7 +1215,6 @@ app.get("/api/tables/equipment-list", async (req, res) => {
         ? dataInst.toISOString().slice(0, 10)
         : "Sem data";
 
-      // 👇 Ajuste da regra de status: 0 = Ativo, 2 = Inativo
       const statusNum = Number(r.status);
 
       let statusFormatado;
@@ -1343,14 +1252,20 @@ app.get("/api/tables/triggers-by-equipment", async (req, res) => {
     const defaultFrom = new Date();
     defaultFrom.setDate(defaultFrom.getDate() - 30);
 
-    const toStr = to || defaultTo.toISOString().slice(0, 10);
-    const fromStr = from || defaultFrom.toISOString().slice(0, 10);
+    const toStr =
+      typeof to === "string" && to ? to : defaultTo.toISOString().slice(0, 10);
+    const fromStr =
+      typeof from === "string" && from
+        ? from
+        : defaultFrom.toISOString().slice(0, 10);
 
+    // máquinas visíveis para o usuário (ou todas, se master)
     const machineIds = await resolveMachineIds(
       userEmail,
       req.query,
       req.isMaster
     );
+
     if (!machineIds.length) {
       return res.json({
         columns: ["Equipamento", "Acionamentos"],
@@ -1360,51 +1275,67 @@ app.get("/api/tables/triggers-by-equipment", async (req, res) => {
       });
     }
 
-    const [rows] = await pool.query(
-      `
-      SELECT
-        x.equipamento_id,
-        x.equipamento,
-        SUM(x.delta) AS acionamentos
-      FROM (
-        SELECT
-          m.id AS equipamento_id,
-          COALESCE(NULLIF(m.nome,''), CONCAT('EQP-', m.id)) AS equipamento,
-          GREATEST(
-            (MAX(COALESCE(NULLIF(inf.contador_acionamentos_agua_fria, ''), '0') + 0) -
-             MIN(COALESCE(NULLIF(inf.contador_acionamentos_agua_fria, ''), '0') + 0)), 0
-          ) +
-          GREATEST(
-            (MAX(COALESCE(NULLIF(inf.contador_acionamentos_agua_quente, ''), '0') + 0) -
-             MIN(COALESCE(NULLIF(inf.contador_acionamentos_agua_quente, ''), '0') + 0)), 0
-          ) +
-          GREATEST(
-            (MAX(COALESCE(NULLIF(inf.contador_acionamentos_agua_pet, ''), '0') + 0) -
-             MIN(COALESCE(NULLIF(inf.contador_acionamentos_agua_pet, ''), '0') + 0)), 0
-          ) +
-          GREATEST(
-            (MAX(COALESCE(NULLIF(inf.contador_acionamentos_aspersor, ''), '0') + 0) -
-             MIN(COALESCE(NULLIF(inf.contador_acionamentos_aspersor, ''), '0') + 0)), 0
-          ) AS delta
-        FROM informacoes inf FORCE INDEX (idx_informacoes_maquina_created)
-        JOIN maquinas m ON m.id = inf.maquina_id
-        WHERE inf.maquina_id IN (?)
-          AND inf.created_at >= ?
-          AND inf.created_at < DATE_ADD(?, INTERVAL 1 DAY)
-        GROUP BY DATE(inf.created_at), m.id, equipamento
-      ) x
-      GROUP BY x.equipamento_id, x.equipamento
-      ORDER BY acionamentos DESC
-      `,
-      [machineIds, fromStr, toStr]
+    // 1) Busca acionamentos por máquina no BigQuery
+    const aggRows = await getEquipmentAggregatesFromBigQuery(
+      machineIds,
+      fromStr,
+      toStr
     );
 
+    if (!aggRows || !aggRows.length) {
+      return res.json({
+        columns: ["Equipamento", "Acionamentos"],
+        rows: [],
+        total: 0,
+        _period: { from: fromStr, to: toStr, email: userEmail },
+      });
+    }
+
+    // 2) Mapeia total de acionamentos por máquina
+    const triggersByMachine = new Map();
+    const idsFromAgg = [];
+
+    for (const r of aggRows) {
+      const id = Number(r.maquina_id);
+      const acionamentos =
+        Number(r.sum_c_fria || 0) +
+        Number(r.sum_c_quente || 0) +
+        Number(r.sum_c_pet || 0) +
+        Number(r.sum_c_asp || 0);
+
+      triggersByMachine.set(id, acionamentos);
+      idsFromAgg.push(id);
+    }
+
+    // 3) Busca nomes dos equipamentos no MySQL
+    const [machines] = await pool.query(
+      `
+      SELECT
+        m.id,
+        COALESCE(NULLIF(m.nome, ''), CONCAT('EQP-', m.id)) AS equipamento
+      FROM maquinas m
+      WHERE m.id IN (?)
+      `,
+      [idsFromAgg]
+    );
+
+    const nameById = new Map();
+    for (const m of machines || []) {
+      nameById.set(Number(m.id), m.equipamento);
+    }
+
+    // 4) Monta as linhas da tabela (apenas quem teve acionamento > 0)
+    const tableRows = idsFromAgg
+      .map((id) => {
+        const nome = nameById.get(id) || `EQP-${id}`;
+        const acionamentos = triggersByMachine.get(id) || 0;
+        return [String(nome), acionamentos];
+      })
+      .filter((row) => row[1] > 0)
+      .sort((a, b) => Number(b[1]) - Number(a[1]));
+
     const columns = ["Equipamento", "Acionamentos"];
-    const tableRows = rows.map((r) => [
-      String(r.equipamento),
-      Number(r.acionamentos || 0),
-    ]);
-    const total = rows.length;
+    const total = tableRows.length;
 
     res.json({
       columns,
@@ -1413,7 +1344,7 @@ app.get("/api/tables/triggers-by-equipment", async (req, res) => {
       _period: { from: fromStr, to: toStr, email: userEmail },
     });
   } catch (e) {
-    console.error(e);
+    console.error("Erro em /api/tables/triggers-by-equipment:", e);
     res.status(500).json({ error: String(e) });
   }
 });
@@ -1447,7 +1378,6 @@ app.get("/api/kpis/equipment", async (req, res) => {
       });
     }
 
-    // 👉 Agora contamos ativos/inativos pelo campo m.status (0 / 2)
     const [statusRows] = await pool.query(
       `
       SELECT m.status
@@ -1514,7 +1444,6 @@ app.get("/api/location/kpis", async (req, res) => {
       });
     }
 
-    // Quantidade de localizações (cidades)
     const [locRows] = await pool.query(
       `
       SELECT COUNT(DISTINCT m.cidade_id) AS qtd
@@ -1525,7 +1454,6 @@ app.get("/api/location/kpis", async (req, res) => {
     );
     const users_total = Number(locRows?.[0]?.qtd || 0);
 
-    // Conta ativos/inativos pelo campo m.status (0 = Ativo, 2 = Inativo)
     const [statusRows] = await pool.query(
       `
       SELECT m.status
@@ -1564,6 +1492,7 @@ app.get("/api/location/summary", async (req, res) => {
     const userEmail = req.userEmail;
     const { from, to } = req.query;
 
+    // Período padrão: últimos 30 dias
     const defaultTo = new Date();
     const defaultFrom = new Date();
     defaultFrom.setDate(defaultFrom.getDate() - 30);
@@ -1575,11 +1504,7 @@ app.get("/api/location/summary", async (req, res) => {
         ? from
         : defaultFrom.toISOString().slice(0, 10);
 
-    const toPlus1 = new Date(toStr);
-    toPlus1.setDate(toPlus1.getDate() + 1);
-    const toPlus1Str = toPlus1.toISOString().slice(0, 10);
-
-    // máquinas visíveis (usuário ou master) + filtros
+    // Máquinas visíveis
     const machineIds = await resolveMachineIds(
       userEmail,
       req.query,
@@ -1601,118 +1526,90 @@ app.get("/api/location/summary", async (req, res) => {
       });
     }
 
-    // --- 1) Litros por máquina (mesma lógica dos KPIs) ---
-    const perMachineDeltaSql = `
-      SELECT
-        DATE(inf.created_at) AS d,
-        GREATEST(
-          (MAX(COALESCE(NULLIF(inf.vazao_agua_fria,   ''), '0') + 0) -
-           MIN(COALESCE(NULLIF(inf.vazao_agua_fria,   ''), '0') + 0)), 0
-        ) AS water_fria_delta,
-        GREATEST(
-          (MAX(COALESCE(NULLIF(inf.vazao_agua_quente, ''), '0') + 0) -
-           MIN(COALESCE(NULLIF(inf.vazao_agua_quente, ''), '0') + 0)), 0
-        ) AS water_quente_delta,
-        GREATEST(
-          (MAX(COALESCE(NULLIF(inf.vazao_agua_pet,    ''), '0') + 0) -
-           MIN(COALESCE(NULLIF(inf.vazao_agua_pet,    ''), '0') + 0)), 0
-        ) AS water_pets_delta
-      FROM informacoes inf FORCE INDEX (idx_informacoes_maquina_created)
-      WHERE inf.maquina_id = ?
-        AND inf.created_at >= ?
-        AND inf.created_at < ?
-      GROUP BY d
-    `;
-
-    const litersByMachine = new Map();
-
-    await Promise.all(
-      machineIds.map(async (mid) => {
-        const [rows] = await pool.query(perMachineDeltaSql, [
-          mid,
-          fromStr,
-          toPlus1Str,
-        ]);
-
-        let sum = 0;
-        for (const r of rows || []) {
-          const fria = Number(r.water_fria_delta || 0);
-          const quente = Number(r.water_quente_delta || 0);
-          const pets = Number(r.water_pets_delta || 0);
-          sum += fria + quente + pets;
-        }
-
-        const litros = sum * LITERS_SCALE;
-        litersByMachine.set(mid, litros);
-      })
+    // 1) Litros por máquina no BigQuery
+    const litersRows = await getLitersByMachineFromBigQuery(
+      machineIds,
+      fromStr,
+      toStr
     );
 
-    // --- 2) Máquinas agrupadas por cidade ---
-    const [locRows] = await pool.query(
+    const litersByMachine = new Map();
+    for (const r of litersRows || []) {
+      const mid = Number(r.maquina_id);
+      const litros = Number(r.litros || 0);
+      litersByMachine.set(mid, litros);
+    }
+
+    // 2) Busca cidades + equipamentos do MySQL
+    const [locations] = await pool.query(
       `
       SELECT
+        m.id AS maquina_id,
         m.cidade_id,
-        COALESCE(c.nome, CONCAT('Cidade ', m.cidade_id)) AS nome,
-        c.uf AS uf,
-        COUNT(*) AS total_equip
+        COALESCE(c.nome, CONCAT('Cidade ', m.cidade_id)) AS cidade,
+        c.uf AS uf
       FROM maquinas m
       LEFT JOIN cidades c ON c.id = m.cidade_id
       WHERE m.id IN (?)
-      GROUP BY m.cidade_id, nome, uf
-      ORDER BY nome
       `,
       [machineIds]
     );
 
-    const columns = [
-      "Localização",
-      "Total de Equipamentos",
-      "Ativos no período",
-      "Inativos no período",
-      "Litros no período",
-    ];
+    // 3) Agrupar por cidade
+    const mapCidade = new Map();
 
-    const rows = [];
+    for (const row of locations) {
+      const mid = Number(row.maquina_id);
+      const cidade = row.cidade || "Sem Cidade";
+      const uf = row.uf || "";
+      const litros = litersByMachine.get(mid) || 0;
 
-    for (const r of locRows || []) {
-      // máquinas dessa cidade (dentro do conjunto filtrado)
-      const [cityMachines] = await pool.query(
-        `
-        SELECT m.id
-          FROM maquinas m
-         WHERE m.id IN (?)
-           AND m.cidade_id = ?
-        `,
-        [machineIds, r.cidade_id]
-      );
+      const key = `${cidade}__${uf}`;
 
-      const ids = (cityMachines || []).map((m) => m.id);
-
-      const total = Number(r.total_equip || ids.length || 0);
-
-      // ativos = máquinas dessa cidade com litros > 0 no período
-      let ativos = 0;
-      let litrosTotal = 0;
-
-      for (const id of ids) {
-        const litros = litersByMachine.get(id) || 0;
-        litrosTotal += litros;
-        if (litros > 0) ativos++;
+      if (!mapCidade.has(key)) {
+        mapCidade.set(key, {
+          cidade,
+          uf,
+          total: 0,
+          ativos: 0,
+          litrosTotal: 0,
+        });
       }
 
-      const inativos = Math.max(total - ativos, 0);
+      const item = mapCidade.get(key);
+      item.total += 1;
+      item.litrosTotal += litros;
+
+      if (litros > 0) {
+        item.ativos += 1;
+      }
+    }
+
+    // 4) Monta linhas
+    const rows = [];
+
+    for (const [, item] of mapCidade.entries()) {
+      const inativos = Math.max(item.total - item.ativos, 0);
 
       rows.push([
-        `${r.nome}${r.uf ? `/${r.uf}` : ""}`,
-        total,
-        ativos,
+        `${item.cidade}${item.uf ? "/" + item.uf : ""}`,
+        item.total,
+        item.ativos,
         inativos,
-        litrosTotal,
+        item.litrosTotal,
       ]);
     }
 
+    rows.sort((a, b) => b[4] - a[4]); // ordena por litros desc
+
     res.json({
-      columns,
+      columns: [
+        "Localização",
+        "Total de Equipamentos",
+        "Ativos no período",
+        "Inativos no período",
+        "Litros no período",
+      ],
       rows,
       total: rows.length,
       _period: { from: fromStr, to: toStr, email: userEmail },
@@ -1751,7 +1648,6 @@ app.get("/api/filters", async (req, res) => {
     let usuarios = [];
 
     if (isMaster) {
-      // Master: lista todos os usuários que têm máquinas vinculadas
       const [userRows] = await pool.query(
         `
         SELECT DISTINCT u.id,
@@ -1772,7 +1668,6 @@ app.get("/api/filters", async (req, res) => {
         email: u.email,
       }));
     } else {
-      // Cliente normal: só ele mesmo
       const [userRows] = await pool.query(
         `SELECT id, email, COALESCE(name, email) AS label
            FROM users WHERE email = ? LIMIT 1`,
@@ -1786,7 +1681,6 @@ app.get("/api/filters", async (req, res) => {
       }));
     }
 
-    // Modelos
     const [modelRows] = await pool.query(
       `
       SELECT DISTINCT COALESCE(NULLIF(t.nome,''), 'Sem Modelo') AS nome, t.id
@@ -1802,7 +1696,6 @@ app.get("/api/filters", async (req, res) => {
       label: r.nome,
     }));
 
-    // Equipamentos
     const [equipRows] = await pool.query(
       `
       SELECT m.id,
@@ -1818,7 +1711,6 @@ app.get("/api/filters", async (req, res) => {
       label: r.nome,
     }));
 
-    // Séries
     const [seriesRows] = await pool.query(
       `
       SELECT DISTINCT
