@@ -134,7 +134,9 @@ export function DataTable({
 
                   return (
                     <TableCell key={cellIdx}>
-                      {display === 0 ? "0" : display}
+                      {display === null || display === "0"
+                        ? "0"
+                        : display || ""}
                     </TableCell>
                   );
                 })}
