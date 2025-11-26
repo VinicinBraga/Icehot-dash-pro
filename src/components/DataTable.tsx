@@ -110,33 +110,31 @@ export function DataTable({
             {paginatedRows.map((row, idx) => (
               <TableRow key={idx}>
                 {row.map((cell, cellIdx) => {
-                  // Coluna especial: Próx. troca filtro
-                  if (isProxTrocaColumn(cellIdx)) {
-                    const text = cell ? String(cell) : "-";
-                    return (
-                      <TableCell key={cellIdx}>
-                        {cell ? (
-                          <span
-                            className={
-                              "px-2 py-1 rounded-full text-xs font-semibold " +
-                              getFilterStatusClass(text)
-                            }
-                          >
-                            {text}
-                          </span>
-                        ) : (
-                          <span className="text-xs text-muted-foreground">
-                            -
-                          </span>
-                        )}
-                      </TableCell>
-                    );
+                  let display: string | number = cell;
+
+                  if (typeof cell === "number") {
+                    // Tabela específica: "Equipamentos por Localização"
+                    const isLocationTable =
+                      title === "Equipamentos por Localização";
+                    // Colunas 1, 2 e 3 = Total / Ativos / Inativos
+                    const isCountColumn =
+                      cellIdx === 1 || cellIdx === 2 || cellIdx === 3;
+
+                    if (isLocationTable && isCountColumn) {
+                      // Formata como número inteiro (sem casas decimais)
+                      display = new Intl.NumberFormat("pt-BR", {
+                        minimumFractionDigits: 0,
+                        maximumFractionDigits: 0,
+                      }).format(cell);
+                    } else {
+                      // Demais casos continuam usando o formatNumber padrão
+                      display = formatNumber(cell);
+                    }
                   }
 
-                  // Demais colunas (padrão)
                   return (
                     <TableCell key={cellIdx}>
-                      {typeof cell === "number" ? formatNumber(cell) : cell}
+                      {display === 0 ? "0" : display}
                     </TableCell>
                   );
                 })}

@@ -14,7 +14,7 @@ export interface KpiData {
   };
   equipamentos_utilizados: number;
   garrafas_poupadas: number;
-  co2_poupado_m3: number;
+  co2_poupado_kg: number;
 }
 
 export interface SeriesData {
@@ -70,7 +70,7 @@ export const mockKpis: KpiData = {
   },
   equipamentos_utilizados: 0,
   garrafas_poupadas: 0,
-  co2_poupado_m3: 0,
+  co2_poupado_kg: 0,
 };
 
 export const mockWaterSeries: SeriesData = {

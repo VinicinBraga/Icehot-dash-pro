@@ -37,7 +37,7 @@ export function KpiCard({
 
       <div className="text-2xl font-semibold mt-1">
         {display}
-        {suffix}
+        {suffix ? ` ${suffix}` : ""}
       </div>
 
       {helpText && (

@@ -17,7 +17,7 @@ export interface KpiData {
   };
   equipamentos_utilizados: number;
   garrafas_poupadas: number;
-  co2_poupado_m3: number;
+  co2_poupado_kg: number;
   _period?: { from: string; to: string; email: string };
 }
 

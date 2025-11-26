@@ -61,7 +61,7 @@ app.use(express.json());
 
 const LITERS_SCALE = 0.001;
 const BOTTLE_LITERS = 0.5;
-const CO2_PER_LITER_M3 = 0.00003;
+const CO2_PER_LITER_KG = 0.17;
 
 const asNum = (v) =>
   v === undefined || v === null || v === "" ? undefined : Number(v);
@@ -117,25 +117,47 @@ function normalizeCityUf(cidadeRaw, ufRaw) {
   };
 }
 
+// cache em memória por cidade+UF (vale para todo o processo Node)
+const cityCoordCache = new Map();
+
+/**
+ * Busca coordenadas da cidade/UF com 3 níveis:
+ * - cache em memória (evita bater no MySQL toda hora)
+ * - tabela city_coords (exato)
+ * - tabela city_coords (normalizado)
+ */
 async function getCityCoords(pool, cidadeRaw, ufRaw) {
   const { cidade, uf, keyCidade } = normalizeCityUf(cidadeRaw, ufRaw);
 
+  // sem cidade/UF → sem coordenada
   if (!cidade || !uf) {
     return { lat: null, lng: null, source: "missing" };
   }
 
+  const cacheKey = `${cidade}|${uf}`;
+
+  // 0) cache em memória
+  const cached = cityCoordCache.get(cacheKey);
+  if (cached) {
+    return { ...cached, source: "memory" };
+  }
+
+  // 1) cache exato no MySQL
   const [hit1] = await pool.query(
     "SELECT lat, lng FROM city_coords WHERE cidade = ? AND uf = ? LIMIT 1",
     [cidade, uf]
   );
+
   if (hit1.length) {
-    return {
+    const value = {
       lat: Number(hit1[0].lat),
       lng: Number(hit1[0].lng),
-      source: "cache",
     };
+    cityCoordCache.set(cacheKey, value);
+    return { ...value, source: "cache" };
   }
 
+  // 2) cache “normalizado” (sem acentos / minúsculas)
   const [hit2] = await pool.query(
     `SELECT lat, lng
        FROM city_coords
@@ -144,15 +166,20 @@ async function getCityCoords(pool, cidadeRaw, ufRaw) {
       LIMIT 1`,
     [keyCidade, uf]
   );
+
   if (hit2.length) {
-    return {
+    const value = {
       lat: Number(hit2[0].lat),
       lng: Number(hit2[0].lng),
-      source: "cache-slim",
     };
+    cityCoordCache.set(cacheKey, value);
+    return { ...value, source: "cache-slim" };
   }
 
-  return { lat: null, lng: null, source: "missing" };
+  // 3) nada encontrado → não inventa coordenada
+  const missing = { lat: null, lng: null };
+  cityCoordCache.set(cacheKey, missing);
+  return { ...missing, source: "missing" };
 }
 
 /**
@@ -406,7 +433,7 @@ app.get("/api/kpis", async (req, res) => {
         triggers: { total: 0, fria: 0, quente: 0, pets: 0, aspersor: 0 },
         equipamentos_utilizados: 0,
         garrafas_poupadas: 0,
-        co2_poupado_m3: 0,
+        co2_poupado_kg: 0,
         _period: { from: fromStr, to: toStr, email: userEmail },
       });
     }
@@ -438,7 +465,7 @@ app.get("/api/kpis", async (req, res) => {
     const equipamentos_utilizados = machineIds.length;
 
     const garrafas_poupadas = litros_total / BOTTLE_LITERS;
-    const co2_poupado_m3 = litros_total * CO2_PER_LITER_M3;
+    const co2_poupado_kg = litros_total * CO2_PER_LITER_KG;
 
     // Debug leve pra gente ver no log se algo vier zerado
     console.log("KPIs BQ debug:", {
@@ -465,7 +492,7 @@ app.get("/api/kpis", async (req, res) => {
       },
       equipamentos_utilizados,
       garrafas_poupadas,
-      co2_poupado_m3,
+      co2_poupado_kg,
       _period: { from: fromStr, to: toStr, email: userEmail },
     });
   } catch (e) {
@@ -497,7 +524,7 @@ app.get("/api/localizacao", async (req, res) => {
         ? from
         : defaultFrom.toISOString().slice(0, 10);
 
-    // máquinas visíveis (usuário normal ou master, com filtros)
+    // 0) máquinas visíveis pro usuário / filtros
     const machineIds = await resolveMachineIds(
       userEmail,
       req.query,
@@ -507,26 +534,25 @@ app.get("/api/localizacao", async (req, res) => {
     if (!machineIds.length) {
       return res.json({
         points: [],
-        _period: { from: fromStr, to: toStr, email: userEmail || null },
+        _period: { from: fromStr, to: toStr, email: userEmail },
       });
     }
 
-    // 1) Litros por máquina via BigQuery (já agregado por dia no fato)
+    // 1) litros por máquina no BigQuery (NOVA FONTE)
     const litersRows = await getLitersByMachineFromBigQuery(
       machineIds,
       fromStr,
       toStr
     );
 
-    // Mapa: maquina_id -> litros no período
     const litersByMachine = new Map();
     for (const r of litersRows || []) {
       const mid = Number(r.maquina_id);
-      const litros = Number(r.litros || 0);
+      const litros = Number(r.litros || 0); // já vem em litros do BQ
       litersByMachine.set(mid, litros);
     }
 
-    // 2) Metadados das máquinas (cidade/UF, nome, status) via MySQL
+    // 2) metadados das máquinas (cidade/UF, nome, status) ainda via MySQL
     const [machines] = await pool.query(
       `
       SELECT
@@ -542,10 +568,11 @@ app.get("/api/localizacao", async (req, res) => {
       [machineIds]
     );
 
-    // 3) Monta os pontos para o mapa
+    // 3) monta os pontos que o front usa no mapa
     const points = await Promise.all(
       (machines || []).map(async (m) => {
-        const litros = Number(litersByMachine.get(m.id) || 0);
+        const mid = Number(m.id);
+        const litros = Number(litersByMachine.get(mid) || 0);
 
         // Normaliza status vindo do banco
         let statusNorm = (m.status ?? "").toString().trim().toLowerCase();
@@ -557,24 +584,24 @@ app.get("/api/localizacao", async (req, res) => {
           else if (sNum === 2) statusNorm = "inativo";
         }
 
-        // Regra “uso no período”: se teve consumo, consideramos ativo
+        // Se teve consumo no período, consideramos ativo
         if (litros > 0) {
           statusNorm = "ativo";
         }
 
         const status = statusNorm === "ativo" ? "Ativo" : "Inativo";
 
-        // busca coordenadas (cache local no MySQL)
+        // Coordenadas (cacheadas) da cidade
         const coords = await getCityCoords(pool, m.cidade, m.uf);
 
         return {
           lat: coords.lat,
           lng: coords.lng,
-          cidade: m.cidade || "Sem cidade",
+          cidade: m.cidade || "Sem Cidade",
           uf: m.uf || "",
           qtd: 1,
-          litros,
           status,
+          litros,
           equipamento: m.equipamento,
         };
       })
@@ -582,7 +609,7 @@ app.get("/api/localizacao", async (req, res) => {
 
     res.json({
       points,
-      _period: { from: fromStr, to: toStr, email: userEmail || null },
+      _period: { from: fromStr, to: toStr, email: userEmail },
     });
   } catch (e) {
     console.error("Erro em /api/localizacao:", e);
@@ -1504,7 +1531,7 @@ app.get("/api/location/summary", async (req, res) => {
         ? from
         : defaultFrom.toISOString().slice(0, 10);
 
-    // Máquinas visíveis
+    // Máquinas visíveis conforme filtros/usuário
     const machineIds = await resolveMachineIds(
       userEmail,
       req.query,
@@ -1526,7 +1553,7 @@ app.get("/api/location/summary", async (req, res) => {
       });
     }
 
-    // 1) Litros por máquina no BigQuery
+    // 1) Litros por máquina no BigQuery (mesma base do resto do dash)
     const litersRows = await getLitersByMachineFromBigQuery(
       machineIds,
       fromStr,
@@ -1540,14 +1567,14 @@ app.get("/api/location/summary", async (req, res) => {
       litersByMachine.set(mid, litros);
     }
 
-    // 2) Busca cidades + equipamentos do MySQL
+    // 2) Busca cidades + status dos equipamentos no MySQL
     const [locations] = await pool.query(
       `
       SELECT
-        m.id AS maquina_id,
-        m.cidade_id,
+        m.id          AS maquina_id,
         COALESCE(c.nome, CONCAT('Cidade ', m.cidade_id)) AS cidade,
-        c.uf AS uf
+        c.uf          AS uf,
+        m.status      AS status
       FROM maquinas m
       LEFT JOIN cidades c ON c.id = m.cidade_id
       WHERE m.id IN (?)
@@ -1555,14 +1582,30 @@ app.get("/api/location/summary", async (req, res) => {
       [machineIds]
     );
 
-    // 3) Agrupar por cidade
+    // 3) Agrupa por cidade, usando a MESMA regra de ativo/inativo do mapa
     const mapCidade = new Map();
 
-    for (const row of locations) {
+    for (const row of locations || []) {
       const mid = Number(row.maquina_id);
       const cidade = row.cidade || "Sem Cidade";
       const uf = row.uf || "";
       const litros = litersByMachine.get(mid) || 0;
+
+      // Normaliza status vindo do banco (0/2, texto etc.)
+      let statusNorm = (row.status ?? "").toString().trim().toLowerCase();
+      const sNum = Number(statusNorm);
+      if (!Number.isNaN(sNum)) {
+        if (sNum === 0) statusNorm = "ativo";
+        else if (sNum === 2) statusNorm = "inativo";
+      }
+
+      // Mesma regra do /api/localizacao:
+      // se teve consumo no período, consideramos ATIVO
+      if (litros > 0) {
+        statusNorm = "ativo";
+      }
+
+      const isAtivo = statusNorm === "ativo";
 
       const key = `${cidade}__${uf}`;
 
@@ -1579,13 +1622,12 @@ app.get("/api/location/summary", async (req, res) => {
       const item = mapCidade.get(key);
       item.total += 1;
       item.litrosTotal += litros;
-
-      if (litros > 0) {
+      if (isAtivo) {
         item.ativos += 1;
       }
     }
 
-    // 4) Monta linhas
+    // 4) Monta linhas da tabela
     const rows = [];
 
     for (const [, item] of mapCidade.entries()) {
@@ -1593,14 +1635,15 @@ app.get("/api/location/summary", async (req, res) => {
 
       rows.push([
         `${item.cidade}${item.uf ? "/" + item.uf : ""}`,
-        item.total,
-        item.ativos,
-        inativos,
+        Math.round(item.total),
+        Math.round(item.ativos),
+        Math.round(item.inativos),
         item.litrosTotal,
       ]);
     }
 
-    rows.sort((a, b) => b[4] - a[4]); // ordena por litros desc
+    // Ordena por litros desc
+    rows.sort((a, b) => Number(b[4]) - Number(a[4]));
 
     res.json({
       columns: [

@@ -452,8 +452,8 @@ const Index = () => {
               />
               <KpiCard
                 label="CO₂ Poupado"
-                value={val(kpis?.co2_poupado_m3)}
-                suffix=" m³"
+                value={val(kpis?.co2_poupado_kg)}
+                suffix=" kg"
                 helpText="Emissão de CO₂ evitada"
                 formatter={formatCO2}
                 icon={<Cloud />}
