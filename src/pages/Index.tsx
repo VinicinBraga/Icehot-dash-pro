@@ -4,19 +4,7 @@ import { subDays } from "date-fns";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import {
-  Activity,
-  BarChart3,
-  Package,
-  MapPin,
-  Droplet,
-  Snowflake,
-  Flame,
-  PawPrint,
-  Milk,
-  Cloud,
-  Cog,
-} from "lucide-react";
+
 import { DateRangePicker } from "@/components/DateRangePicker";
 import { FilterBar } from "@/components/FilterBar";
 import { KpiCard } from "@/components/KpiCard";
@@ -37,6 +25,20 @@ import { useInstallationsSeries } from "@/hooks/useInstallationsSeries";
 import { useCumulativeSeries } from "@/hooks/useCumulativeSeries";
 import { useLocationKpis } from "@/hooks/useLocationKpis";
 import { useLocationSummary } from "@/hooks/useLocationSummary";
+
+import {
+  Activity,
+  BarChart3,
+  Package,
+  MapPin,
+  Droplet,
+  Snowflake,
+  Flame,
+  PawPrint,
+  Milk,
+  Cloud,
+  Cog,
+} from "lucide-react";
 
 import {
   formatLiters,
@@ -242,7 +244,10 @@ const Index = () => {
       <header className="border-b border-border bg-card/80 backdrop-blur">
         <div className="max-w-[1400px] mx-auto px-6 py-3 flex items-center justify-between gap-4">
           {/* Logo + título */}
-          <div className="flex items-center gap-4 md:gap-5">
+          <div
+            className="flex items-center gap-4 md:gap-5 cursor-pointer"
+            onClick={() => setActiveTab("overview")}
+          >
             {/* Logo bem grande */}
             <div className="flex items-center">
               <img

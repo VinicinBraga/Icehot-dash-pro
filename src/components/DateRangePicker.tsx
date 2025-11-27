@@ -154,7 +154,7 @@ export function DateRangePicker({ value, onChange }: DateRangePickerProps) {
                 <label className="text-xs text-muted-foreground">De</label>
                 <Input
                   type="date"
-                  value={toYMD(draft.from)}
+                  defaultValue={toYMD(draft.from)}
                   onChange={(e) => setDraftFrom(e.target.value)}
                 />
               </div>
@@ -162,7 +162,7 @@ export function DateRangePicker({ value, onChange }: DateRangePickerProps) {
                 <label className="text-xs text-muted-foreground">Até</label>
                 <Input
                   type="date"
-                  value={toYMD(draft.to)}
+                  defaultValue={toYMD(draft.to)}
                   onChange={(e) => setDraftTo(e.target.value)}
                 />
               </div>
