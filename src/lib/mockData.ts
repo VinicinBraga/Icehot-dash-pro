@@ -169,23 +169,19 @@ export const mockLocationTable: TableData = {
 
 export const mockFilterOptions: FilterOptions = {
   usuarios: [
-    { value: 1, label: 'Maria Silva', email: 'maria@icehot.com' },
-    { value: 2, label: 'João Santos', email: 'joao@icehot.com' },
-    { value: 3, label: 'Ana Costa', email: 'ana@icehot.com' },
+    { value: 1, label: 'Vazio', email: '' },
+ 
   ],
   modelos: [
-    { value: 1, label: 'Slim' },
-    { value: 2, label: 'Pro' },
+    { value: 1, label: 'Vazio' },
   ],
   equipamentos: [
-    { value: 21, label: 'EQP-21' },
-    { value: 45, label: 'EQP-45' },
-    { value: 12, label: 'EQP-12' },
+    { value: 21, label: 'Vazio' },
+
   ],
   series: [
-    { value: 'SN-1234', label: 'SN-1234' },
-    { value: 'SN-5678', label: 'SN-5678' },
-    { value: 'SN-9012', label: 'SN-9012' },
+    { value: '', label: '' },
+
   ],
   status: [
     { value: 'Ativo', label: 'Ativo' },
