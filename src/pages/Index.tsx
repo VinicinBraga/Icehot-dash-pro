@@ -1,5 +1,5 @@
 // src/pages/Index.tsx
-import { useState, useEffect, lazy, Suspense } from "react";
+import { useState, useEffect, lazy, Suspense, useMemo } from "react";
 import { subDays } from "date-fns";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
@@ -127,6 +127,43 @@ const Index = () => {
     error: null,
   });
 
+  // ============================
+  // ✅ BOOT LOADING (apenas no 1º load)
+  // ============================
+  const bootLoading = useMemo(() => {
+    // “essencial” pra abrir sem mostrar 0:
+    // - filtros (pra FilterBar já vir pronto)
+    // - visão geral (kpis, charts e tabelas)
+    return (
+      filtersLoading ||
+      kpisLoading ||
+      water.loading ||
+      trig.loading ||
+      modelPie.loading ||
+      waterTable.loading ||
+      triggerTable.loading
+    );
+  }, [
+    filtersLoading,
+    kpisLoading,
+    water.loading,
+    trig.loading,
+    modelPie.loading,
+    waterTable.loading,
+    triggerTable.loading,
+  ]);
+
+  const bootHasError = Boolean(filtersError || kpisError);
+
+  // trava só na primeira vez; depois disso não “pisca” loader em toda troca de filtro
+  const [bootDone, setBootDone] = useState(false);
+
+  useEffect(() => {
+    if (bootDone) return;
+    // se terminou de carregar OU deu erro, liberamos a tela (pra exibir erro)
+    if (!bootLoading || bootHasError) setBootDone(true);
+  }, [bootDone, bootLoading, bootHasError]);
+
   // Carrega KPIs da aba Equipamentos
   useEffect(() => {
     if (activeTab !== "equipment") return;
@@ -238,6 +275,25 @@ const Index = () => {
       });
   }, [activeTab, dateRange, filters]);
 
+  // ✅ Se ainda não terminou o boot, mostra tela de carregamento
+  if (!bootDone) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <div className="w-full max-w-md px-6">
+          <div className="space-y-3">
+            <div className="text-sm text-muted-foreground">
+              Carregando dados do dashboard...
+            </div>
+            <Skeleton className="h-10 w-full rounded-xl" />
+            <Skeleton className="h-24 w-full rounded-2xl" />
+            <Skeleton className="h-24 w-full rounded-2xl" />
+            <Skeleton className="h-24 w-full rounded-2xl" />
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-background">
       {/* Header */}
@@ -276,13 +332,13 @@ const Index = () => {
             {/* “Pílula” do período – mais comprida e alta */}
             <div
               className="
-      hidden sm:flex items-center 
-      rounded-full border border-border bg-background 
-      px-5 py-2 
-      min-w-[320px]
-      text-sm
-      justify-between
-    "
+                hidden sm:flex items-center 
+                rounded-full border border-border bg-background 
+                px-5 py-2 
+                min-w-[320px]
+                text-sm
+                justify-between
+              "
             >
               <span className="mr-2 text-xs font-medium text-muted-foreground">
                 Período:
@@ -303,18 +359,18 @@ const Index = () => {
               type="button"
               variant="outline"
               className="
-      h-[40px]
-      rounded-full 
-      px-5
-      border-border 
-      bg-muted 
-      text-foreground
-      hover:bg-[#1105f2] 
-      hover:text-white 
-      hover:border-[#1105f2]
-      transition-all 
-      flex items-center gap-2
-    "
+                h-[40px]
+                rounded-full 
+                px-5
+                border-border 
+                bg-muted 
+                text-foreground
+                hover:bg-[#1105f2] 
+                hover:text-white 
+                hover:border-[#1105f2]
+                transition-all 
+                flex items-center gap-2
+              "
               onClick={() => {
                 clearToken();
                 window.location.href = "/";

@@ -96,22 +96,15 @@ export function DateRangePicker({ value, onChange }: DateRangePickerProps) {
   };
 
   return (
-    <Popover
-      open={open}
-      onOpenChange={handleOpenChange}
-      /* @radix/shadcn suporta modal */ modal
-    >
+    <Popover open={open} onOpenChange={handleOpenChange} modal>
       <PopoverTrigger asChild>
         <Button
           variant="outline"
           className={cn(
-            // tamanho e formato
             "h-11 w-full rounded-full px-5 flex items-center gap-2 justify-center",
             "text-sm font-medium bg-white border border-border",
-            // hover azul #1105f2
             "hover:bg-[#1105f2] hover:text-white hover:border-[#1105f2]",
             "transition-all duration-200",
-            // estilo quando não há valor
             !value && "text-muted-foreground"
           )}
         >
@@ -121,11 +114,16 @@ export function DateRangePicker({ value, onChange }: DateRangePickerProps) {
       </PopoverTrigger>
 
       <PopoverContent
-        className="w-auto p-0"
-        align="start"
+        className={cn(
+          // ✅ Mobile: cabe na tela + permite rolar
+          "w-[calc(100vw-16px)] max-w-[420px] max-h-[calc(100vh-120px)] overflow-y-auto p-0",
+          // ✅ Desktop (sm+): volta ao normal, sem scroll/sem limite de altura
+          "sm:w-auto sm:max-w-none sm:max-h-none sm:overflow-visible"
+        )}
+        align="center"
         onOpenAutoFocus={(e) => e.preventDefault()}
         onCloseAutoFocus={(e) => e.preventDefault()}
-        onInteractOutside={(e) => e.preventDefault()} // nunca fecha “sem querer”
+        onInteractOutside={(e) => e.preventDefault()}
       >
         <div className="flex" onMouseDown={(e) => e.stopPropagation()}>
           {/* Presets */}
@@ -175,14 +173,16 @@ export function DateRangePicker({ value, onChange }: DateRangePickerProps) {
               locale={ptBR}
               defaultMonth={draft.from ?? new Date()}
               selected={{ from: draft.from, to: draft.to }}
+              modifiersClassNames={{
+                today:
+                  "text-muted-foreground font-normal ring-1 ring-border rounded-md",
+              }}
               onSelect={(range) => {
                 if (!range) return;
-                // 1º clique: define só o from (to = from para exibir seleção)
                 if (range.from && !range.to) {
                   setDraft({ from: range.from, to: range.from });
                   return;
                 }
-                // 2º clique: fecha o range no to
                 if (range.from && range.to) {
                   setDraft({ from: range.from, to: range.to });
                 }
