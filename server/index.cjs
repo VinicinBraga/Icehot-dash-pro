@@ -198,14 +198,18 @@ async function resolveMachineIds(userEmail, q = {}, isMaster = false) {
   let baseIds = [];
 
   if (isMaster) {
-    const [rows] = await pool.query(`SELECT id FROM maquinas`);
+    const [rows] = await pool.query(
+      `SELECT id FROM maquinas WHERE status <> 3`
+    );
     baseIds = rows.map((r) => r.id);
   } else {
     const [baseRows] = await pool.query(
       `SELECT ue.maquina_id
          FROM users u
          JOIN usuarios_equipamentos ue ON ue.usuario_id = u.id
-        WHERE u.email = ?`,
+         JOIN maquinas m ON m.id = ue.maquina_id
+        WHERE u.email = ?
+          AND m.status <> 3`,
       [userEmail]
     );
     baseIds = baseRows.map((r) => r.maquina_id);
@@ -217,7 +221,7 @@ async function resolveMachineIds(userEmail, q = {}, isMaster = false) {
     return baseIds.includes(equipamento) ? [equipamento] : [];
   }
 
-  const where = [`m.id IN (?)`];
+  const where = [`m.id IN (?)`, `m.status <> 3`];
   const params = [baseIds];
 
   if (modelo) {
@@ -250,6 +254,7 @@ async function resolveMachineIds(userEmail, q = {}, isMaster = false) {
         typeof q.to === "string" && q.to
           ? q.to
           : defaultTo.toISOString().slice(0, 10);
+
       const fromStr =
         typeof q.from === "string" && q.from
           ? q.from
@@ -265,6 +270,7 @@ async function resolveMachineIds(userEmail, q = {}, isMaster = false) {
         `,
         [baseIds, fromStr, toStr]
       );
+
       const activeSet = new Set(
         activeRows.map((r) => r.maquina_id).filter(Boolean)
       );
@@ -277,6 +283,7 @@ async function resolveMachineIds(userEmail, q = {}, isMaster = false) {
       if (!baseIds.length) return [];
       params[0] = baseIds;
     } else {
+      // mantém seu comportamento atual para status textual (se existir)
       where.push(`LOWER(TRIM(m.status)) = ?`);
       params.push(s);
     }
@@ -286,6 +293,7 @@ async function resolveMachineIds(userEmail, q = {}, isMaster = false) {
     `SELECT m.id FROM maquinas m WHERE ${where.join(" AND ")}`,
     params
   );
+
   return rows.map((r) => r.id);
 }
 
