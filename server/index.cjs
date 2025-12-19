@@ -1218,21 +1218,55 @@ app.get("/api/tables/equipment-list", async (req, res) => {
     const userEmail = req.userEmail;
     const { from, to } = req.query;
 
-    const machineIds = await resolveMachineIds(
+    // defaults (últimos 30 dias) — igual aos outros endpoints
+    const defaultTo = new Date();
+    const defaultFrom = new Date();
+    defaultFrom.setDate(defaultFrom.getDate() - 30);
+
+    const toStr =
+      typeof to === "string" && to ? to : defaultTo.toISOString().slice(0, 10);
+    const fromStr =
+      typeof from === "string" && from
+        ? from
+        : defaultFrom.toISOString().slice(0, 10);
+
+    // 1) máquinas visíveis / filtros (MySQL)
+    const visibleMachineIds = await resolveMachineIds(
       userEmail,
       req.query,
       req.isMaster
     );
 
-    if (!machineIds.length) {
+    if (!visibleMachineIds.length) {
       return res.json({
         columns: ["Equipamento", "Modelo", "Status", "Próx. troca filtro"],
         rows: [],
         total: 0,
-        _period: { from, to, email: userEmail },
+        _period: { from: fromStr, to: toStr, email: userEmail },
       });
     }
 
+    // 2) ✅ restringe para “máquinas com fato no período” (BigQuery)
+    const aggRows = await getEquipmentAggregatesFromBigQuery(
+      visibleMachineIds,
+      fromStr,
+      toStr
+    );
+
+    const usedIds = (aggRows || [])
+      .map((r) => Number(r.maquina_id))
+      .filter(Boolean);
+
+    if (!usedIds.length) {
+      return res.json({
+        columns: ["Equipamento", "Modelo", "Status", "Próx. troca filtro"],
+        rows: [],
+        total: 0,
+        _period: { from: fromStr, to: toStr, email: userEmail },
+      });
+    }
+
+    // 3) busca detalhes no MySQL (só dos usados)
     const [rowsRaw] = await pool.query(
       `
       SELECT
@@ -1244,12 +1278,13 @@ app.get("/api/tables/equipment-list", async (req, res) => {
       LEFT JOIN tipos t ON m.tipo_id = t.id
       WHERE m.id IN (?)
       `,
-      [machineIds]
+      [usedIds]
     );
 
     const formatted = rowsRaw.map((r) => {
       const dataInst = r.data_instalacao ? new Date(r.data_instalacao) : null;
       if (dataInst) dataInst.setMonth(dataInst.getMonth() + 6);
+
       const proxTroca = dataInst
         ? dataInst.toISOString().slice(0, 10)
         : "Sem data";
@@ -1257,22 +1292,18 @@ app.get("/api/tables/equipment-list", async (req, res) => {
       const statusNum = Number(r.status);
 
       let statusFormatado;
-      if (statusNum === 0) {
-        statusFormatado = "Ativo";
-      } else if (statusNum === 2) {
-        statusFormatado = "Inativo";
-      } else {
-        statusFormatado = "Desconhecido";
-      }
+      if (statusNum === 0) statusFormatado = "Ativo";
+      else if (statusNum === 1 || statusNum === 2) statusFormatado = "Inativo";
+      else statusFormatado = "Desconhecido";
 
       return [r.equipamento, r.modelo, statusFormatado, proxTroca];
     });
 
-    res.json({
+    return res.json({
       columns: ["Equipamento", "Modelo", "Status", "Próx. troca filtro"],
       rows: formatted,
       total: formatted.length,
-      _period: { from, to, email: userEmail },
+      _period: { from: fromStr, to: toStr, email: userEmail },
     });
   } catch (err) {
     console.error("Erro ao listar equipamentos:", err);
@@ -1402,13 +1433,14 @@ app.get("/api/kpis/equipment", async (req, res) => {
     const toStr = to || defaultTo.toISOString().slice(0, 10);
     const fromStr = from || defaultFrom.toISOString().slice(0, 10);
 
-    const machineIds = await resolveMachineIds(
+    // 1) máquinas visíveis / filtros (MySQL)
+    const visibleMachineIds = await resolveMachineIds(
       userEmail,
       req.query,
       req.isMaster
     );
 
-    if (!machineIds.length) {
+    if (!visibleMachineIds.length) {
       return res.json({
         total_equipamentos: 0,
         ativos: 0,
@@ -1417,13 +1449,30 @@ app.get("/api/kpis/equipment", async (req, res) => {
       });
     }
 
+    // 2) ✅ restringe para “máquinas com fato no período” (BigQuery)
+    const aggRows = await getEquipmentAggregatesFromBigQuery(
+      visibleMachineIds,
+      fromStr,
+      toStr
+    );
+
+    const usedIds = (aggRows || [])
+      .map((r) => Number(r.maquina_id))
+      .filter(Boolean);
+
+    if (!usedIds.length) {
+      return res.json({
+        total_equipamentos: 0,
+        ativos: 0,
+        inativos: 0,
+        _period: { from: fromStr, to: toStr, email: userEmail },
+      });
+    }
+
+    // 3) status (MySQL) apenas desses usados
     const [statusRows] = await pool.query(
-      `
-      SELECT m.status
-        FROM maquinas m
-       WHERE m.id IN (?)
-      `,
-      [machineIds]
+      `SELECT m.status FROM maquinas m WHERE m.id IN (?)`,
+      [usedIds]
     );
 
     let ativos = 0;
@@ -1431,17 +1480,12 @@ app.get("/api/kpis/equipment", async (req, res) => {
 
     for (const r of statusRows || []) {
       const s = Number(r.status);
-      if (s === 0) {
-        ativos++;
-      } else if (s === 2) {
-        inativos++;
-      }
+      if (s === 0) ativos++;
+      else if (s === 1 || s === 2) inativos++;
     }
 
-    const total = statusRows.length;
-
-    res.json({
-      total_equipamentos: total,
+    return res.json({
+      total_equipamentos: statusRows.length,
       ativos,
       inativos,
       _period: { from: fromStr, to: toStr, email: userEmail },
@@ -1468,13 +1512,14 @@ app.get("/api/location/kpis", async (req, res) => {
         ? from
         : defaultFrom.toISOString().slice(0, 10);
 
-    const machineIds = await resolveMachineIds(
+    // 1) máquinas visíveis / filtros (MySQL)
+    const visibleMachineIds = await resolveMachineIds(
       userEmail,
       req.query,
       req.isMaster
     );
 
-    if (!machineIds.length) {
+    if (!visibleMachineIds.length) {
       return res.json({
         users_total: 0,
         equipamentos_ativos: 0,
@@ -1483,23 +1528,41 @@ app.get("/api/location/kpis", async (req, res) => {
       });
     }
 
+    // 2) ✅ restringe para “máquinas com fato no período” (BigQuery)
+    const aggRows = await getEquipmentAggregatesFromBigQuery(
+      visibleMachineIds,
+      fromStr,
+      toStr
+    );
+
+    const usedIds = (aggRows || [])
+      .map((r) => Number(r.maquina_id))
+      .filter(Boolean);
+
+    if (!usedIds.length) {
+      return res.json({
+        users_total: 0,
+        equipamentos_ativos: 0,
+        equipamentos_inativos: 0,
+        _period: { from: fromStr, to: toStr, email: userEmail },
+      });
+    }
+
+    // 3) cidades (agora só das usadas)
     const [locRows] = await pool.query(
-      `
-      SELECT COUNT(DISTINCT m.cidade_id) AS qtd
-        FROM maquinas m
-       WHERE m.id IN (?)
-      `,
-      [machineIds]
+      `SELECT COUNT(DISTINCT m.cidade_id) AS qtd
+         FROM maquinas m
+        WHERE m.id IN (?)`,
+      [usedIds]
     );
     const users_total = Number(locRows?.[0]?.qtd || 0);
 
+    // 4) status (agora só das usadas) + regra correta
     const [statusRows] = await pool.query(
-      `
-      SELECT m.status
-        FROM maquinas m
-       WHERE m.id IN (?)
-      `,
-      [machineIds]
+      `SELECT m.status
+         FROM maquinas m
+        WHERE m.id IN (?)`,
+      [usedIds]
     );
 
     let equipamentos_ativos = 0;
@@ -1507,14 +1570,11 @@ app.get("/api/location/kpis", async (req, res) => {
 
     for (const r of statusRows || []) {
       const s = Number(r.status);
-      if (s === 0) {
-        equipamentos_ativos++;
-      } else if (s === 2) {
-        equipamentos_inativos++;
-      }
+      if (s === 0) equipamentos_ativos++;
+      else if (s === 1 || s === 2) equipamentos_inativos++;
     }
 
-    res.json({
+    return res.json({
       users_total,
       equipamentos_ativos,
       equipamentos_inativos,
