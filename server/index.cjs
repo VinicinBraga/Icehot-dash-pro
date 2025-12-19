@@ -448,7 +448,11 @@ app.get("/api/kpis", async (req, res) => {
 
     // 2) Agora buscamos os KPIs no BigQuery
     const row = await getKpisFromBigQuery(machineIds, fromStr, toStr);
-
+    const aggRows = await getEquipmentAggregatesFromBigQuery(
+      machineIds,
+      fromStr,
+      toStr
+    );
     const sum_v_fria = Number(row?.sum_v_fria || 0);
     const sum_v_quente = Number(row?.sum_v_quente || 0);
     const sum_v_pet = Number(row?.sum_v_pet || 0);
@@ -470,7 +474,7 @@ app.get("/api/kpis", async (req, res) => {
     const trg_aspersor = sum_c_asp;
     const trg_total = trg_fria + trg_quente + trg_pets + trg_aspersor;
 
-    const equipamentos_utilizados = machineIds.length;
+    const equipamentos_utilizados = (aggRows || []).length;
 
     const garrafas_poupadas = litros_total / BOTTLE_LITERS;
     const co2_poupado_kg = litros_total * CO2_PER_LITER_KG;
