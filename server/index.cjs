@@ -61,7 +61,7 @@ app.use(express.json());
 
 const LITERS_SCALE = 0.001;
 const BOTTLE_LITERS = 0.5;
-const CO2_PER_LITER_KG = 0.17;
+const CO2_PER_LITER_KG = 0.1;
 
 const asNum = (v) =>
   v === undefined || v === null || v === "" ? undefined : Number(v);
