@@ -1813,17 +1813,24 @@ app.get("/api/filters", async (req, res) => {
 
     const [equipRows] = await pool.query(
       `
-      SELECT m.id,
-             COALESCE(NULLIF(m.nome,''), CONCAT('EQP-', m.id)) AS nome
-        FROM maquinas m
-       WHERE m.id IN (?)
-    ORDER BY nome
+      SELECT
+        m.id,
+        COALESCE(NULLIF(m.nome,''), CONCAT('EQP-', m.id)) AS nome,
+        m.data_instalacao
+      FROM maquinas m
+      WHERE m.id IN (?)
+      ORDER BY nome
       `,
       [machineIds]
     );
+
     const equipamentos = equipRows.map((r) => ({
       value: r.id,
       label: r.nome,
+      // yyyy-mm-dd ou null
+      installedAt: r.data_instalacao
+        ? new Date(r.data_instalacao).toISOString().slice(0, 10)
+        : null,
     }));
 
     const [seriesRows] = await pool.query(

@@ -422,6 +422,12 @@ const Index = () => {
 
           {/* Overview Tab */}
           <TabsContent value="overview" className="space-y-6 mt-6">
+            {/* Info instalação (placeholder) */}
+            {filters.equipamento && (
+              <div className="rounded-xl border bg-white/60 px-4 py-2 text-sm text-muted-foreground">
+                Equipamento instalado desde o dia <b>xx/xx/xxxx</b>
+              </div>
+            )}
             {kpisError && (
               <Badge variant="destructive">
                 Erro ao carregar KPIs: {String(kpisError)}
