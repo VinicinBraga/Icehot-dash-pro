@@ -396,38 +396,44 @@ const Index = () => {
 
         {/* Tabs */}
         <Tabs value={activeTab} onValueChange={setActiveTab}>
-          <TabsList className="grid w-full max-w-lg grid-cols-3 rounded-2xl h-14 p-1">
-            <TabsTrigger
-              value="overview"
-              className="rounded-xl gap-2 h-12 text-base px-4"
-            >
-              <BarChart3 className="h-4 w-4" />
-              Visão Geral
-            </TabsTrigger>
-            <TabsTrigger
-              value="equipment"
-              className="rounded-xl gap-2 h-12 text-base px-4"
-            >
-              <Package className="h-4 w-4" />
-              Equipamentos
-            </TabsTrigger>
-            <TabsTrigger
-              value="location"
-              className="rounded-xl gap-2 h-12 text-base px-4"
-            >
-              <MapPin className="h-4 w-4" />
-              Localização
-            </TabsTrigger>
-          </TabsList>
+          <div className="flex items-center gap-4">
+            <TabsList className="grid w-full max-w-lg grid-cols-3 rounded-2xl h-14 p-1">
+              <TabsTrigger
+                value="overview"
+                className="rounded-xl gap-2 h-12 text-base px-4"
+              >
+                <BarChart3 className="h-4 w-4" />
+                Visão Geral
+              </TabsTrigger>
+
+              <TabsTrigger
+                value="equipment"
+                className="rounded-xl gap-2 h-12 text-base px-4"
+              >
+                <Package className="h-4 w-4" />
+                Equipamentos
+              </TabsTrigger>
+
+              <TabsTrigger
+                value="location"
+                className="rounded-xl gap-2 h-12 text-base px-4"
+              >
+                <MapPin className="h-4 w-4" />
+                Localização
+              </TabsTrigger>
+            </TabsList>
+
+            {/* Info instalação (placeholder) */}
+            {filters?.equipamento && (
+              <div className="flex-1 rounded-xl border bg-white/60 px-4 py-2 text-sm text-muted-foreground h-14 flex items-center">
+                Equipamento instalado desde o dia{" "}
+                <b className="ml-1">xx/xx/xxxx</b>
+              </div>
+            )}
+          </div>
 
           {/* Overview Tab */}
           <TabsContent value="overview" className="space-y-6 mt-6">
-            {/* Info instalação (placeholder) */}
-            {filters.equipamento && (
-              <div className="rounded-xl border bg-white/60 px-4 py-2 text-sm text-muted-foreground">
-                Equipamento instalado desde o dia <b>xx/xx/xxxx</b>
-              </div>
-            )}
             {kpisError && (
               <Badge variant="destructive">
                 Erro ao carregar KPIs: {String(kpisError)}
