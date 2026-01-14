@@ -76,7 +76,21 @@ const Index = () => {
   } = useFilters();
   const [filters, setFilters] = useState<Filters>({});
   const [activeTab, setActiveTab] = useState("overview");
+  type EquipmentFilterItem = {
+    value: number | string;
+    label: string;
+    installedAt?: string | null;
+  };
 
+  const selectedEquip = (
+    filterOptions?.equipamentos as EquipmentFilterItem[] | undefined
+  )?.find((e) => String(e.value) === String(filters?.equipamento));
+
+  const installedBR = selectedEquip?.installedAt
+    ? new Date(selectedEquip.installedAt + "T00:00:00").toLocaleDateString(
+        "pt-BR"
+      )
+    : null;
   // ==== dados visão geral ====
   const {
     data: kpis,
@@ -427,7 +441,7 @@ const Index = () => {
             {filters?.equipamento && (
               <div className="flex-1 rounded-xl border bg-white/60 px-4 py-2 text-sm text-muted-foreground h-14 flex items-center">
                 Equipamento instalado desde o dia{" "}
-                <b className="ml-1">xx/xx/xxxx</b>
+                <b className="ml-1">{installedBR || "—"}</b>
               </div>
             )}
           </div>
