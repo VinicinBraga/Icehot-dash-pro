@@ -491,7 +491,7 @@ const Index = () => {
             </div>
 
             {/* Trigger KPIs */}
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
               <KpiCard
                 label="Total – Acionamentos"
                 value={val(kpis?.triggers.total)}
@@ -519,6 +519,13 @@ const Index = () => {
                 helpText="Acionamentos pets"
                 formatter={formatClicks}
                 icon={<PawPrint />}
+              />
+              <KpiCard
+                label="Acionamento – Aspersor"
+                value={val(kpis?.triggers.aspersor)}
+                helpText="Acionamentos do aspersor"
+                formatter={formatClicks}
+                icon={<Activity />}
               />
             </div>
 

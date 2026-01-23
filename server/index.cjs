@@ -442,8 +442,35 @@ app.get("/api/kpis", async (req, res) => {
         equipamentos_utilizados: 0,
         garrafas_poupadas: 0,
         co2_poupado_kg: 0,
+        modules: { fria: false, quente: false, pets: false }, // 👈 add
         _period: { from: fromStr, to: toStr, email: userEmail },
       });
+    }
+
+    let modules = { fria: true, quente: true, pets: true }; // fallback
+
+    if (machineIds?.length) {
+      // monta placeholders (?, ?, ?)
+      const placeholders = machineIds.map(() => "?").join(",");
+
+      const [rows] = await pool.execute(
+        `
+    SELECT
+      MAX(COALESCE(agua_gelada, 0)) AS fria,
+      MAX(COALESCE(agua_quente, 0)) AS quente,
+      MAX(COALESCE(agua_pet, 0))    AS pets
+    FROM usuarios_equipamentos
+    WHERE maquina_id IN (${placeholders})
+    `,
+        machineIds
+      );
+
+      const r = rows?.[0] || {};
+      modules = {
+        fria: Boolean(r.fria),
+        quente: Boolean(r.quente),
+        pets: Boolean(r.pets),
+      };
     }
 
     // 2) Agora buscamos os KPIs no BigQuery
@@ -505,6 +532,7 @@ app.get("/api/kpis", async (req, res) => {
       equipamentos_utilizados,
       garrafas_poupadas,
       co2_poupado_kg,
+      modules,
       _period: { from: fromStr, to: toStr, email: userEmail },
     });
   } catch (e) {
