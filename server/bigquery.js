@@ -292,10 +292,43 @@ async function getEquipmentAggregatesFromBigQuery(
   return rows;
 }
 
+async function getAspersorPresenceFromBigQuery(machineIds, toDate) {
+  if (!Array.isArray(machineIds) || machineIds.length === 0) {
+    return false;
+  }
+
+  const query = `
+    DECLARE to_date   DATE DEFAULT @to_date;
+    DECLARE from_date DATE DEFAULT DATE_SUB(to_date, INTERVAL 365 DAY);
+    DECLARE machine_ids ARRAY<INT64> DEFAULT @machine_ids;
+
+    SELECT
+      SUM(COALESCE(usos_aspersor_dia, 0)) AS sum_c_asp
+    FROM \`${BQ_PROJECT}.${BQ_DATASET}.${BQ_FACT_TABLE}\`
+    WHERE maquina_id IN UNNEST(machine_ids)
+      AND event_date BETWEEN from_date AND to_date
+  `;
+
+  const options = {
+    query,
+    params: {
+      to_date: toDate,
+      machine_ids: machineIds.map(Number),
+    },
+  };
+
+  const [rows] = await bigquery.query(options);
+
+  const sum = Number(rows?.[0]?.sum_c_asp || 0);
+
+  return sum > 0;
+}
+
 module.exports = {
   getKpisFromBigQuery,
   getLitersByMachineFromBigQuery,
   getWaterSeriesFromBigQuery,
   getTriggerSeriesFromBigQuery,
   getEquipmentAggregatesFromBigQuery,
+  getAspersorPresenceFromBigQuery,
 };

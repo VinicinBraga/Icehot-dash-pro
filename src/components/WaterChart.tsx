@@ -16,15 +16,34 @@ import { formatLiters } from "@/lib/format";
 import type { SeriesData } from "@/lib/types";
 import { mockWaterSeries } from "@/lib/mockData";
 
-export function WaterChart({ data }: { data?: SeriesData }) {
+type Modules = {
+  fria?: boolean;
+  quente?: boolean;
+  pets?: boolean;
+};
+
+export function WaterChart({
+  data,
+  modules,
+}: {
+  data?: SeriesData;
+  modules?: Modules;
+}) {
   const series = data ?? mockWaterSeries;
+
+  // ✅ defaults: se não vier modules, mostra tudo
+  const m: Required<Modules> = {
+    fria: modules?.fria !== false,
+    quente: modules?.quente !== false,
+    pets: modules?.pets !== false,
+  };
 
   const dataPoints = series.labels.map((label, idx) => ({
     name: label,
     total: Number(series.series[0]?.values[idx] ?? 0),
-    fria: Number(series.series[1]?.values[idx] ?? 0),
-    quente: Number(series.series[2]?.values[idx] ?? 0),
-    pets: Number(series.series[3]?.values[idx] ?? 0),
+    fria: m.fria ? Number(series.series[1]?.values[idx] ?? 0) : undefined,
+    quente: m.quente ? Number(series.series[2]?.values[idx] ?? 0) : undefined,
+    pets: m.pets ? Number(series.series[3]?.values[idx] ?? 0) : undefined,
   }));
 
   return (
@@ -41,9 +60,7 @@ export function WaterChart({ data }: { data?: SeriesData }) {
             tickFormatter={(val) => formatLiters(Number(val))}
           />
           <Tooltip
-            formatter={(value: number, _name, _props) =>
-              `${formatLiters(value)} L`
-            }
+            formatter={(value: number) => `${formatLiters(value)} L`}
             labelFormatter={(label) => label}
             contentStyle={{
               backgroundColor: "hsl(var(--card))",
@@ -52,28 +69,38 @@ export function WaterChart({ data }: { data?: SeriesData }) {
             }}
           />
           <Legend />
+
           <Bar dataKey="total" fill="hsl(var(--chart-1))" name="Total (L)" />
-          <Line
-            type="monotone"
-            dataKey="fria"
-            stroke="hsl(var(--chart-2))"
-            name="Fria (L)"
-            strokeWidth={2}
-          />
-          <Line
-            type="monotone"
-            dataKey="quente"
-            stroke="hsl(var(--chart-3))"
-            name="Quente (L)"
-            strokeWidth={2}
-          />
-          <Line
-            type="monotone"
-            dataKey="pets"
-            stroke="hsl(var(--chart-4))"
-            name="Pets (L)"
-            strokeWidth={2}
-          />
+
+          {m.fria && (
+            <Line
+              type="monotone"
+              dataKey="fria"
+              stroke="hsl(var(--chart-2))"
+              name="Fria (L)"
+              strokeWidth={2}
+            />
+          )}
+
+          {m.quente && (
+            <Line
+              type="monotone"
+              dataKey="quente"
+              stroke="hsl(var(--chart-3))"
+              name="Quente (L)"
+              strokeWidth={2}
+            />
+          )}
+
+          {m.pets && (
+            <Line
+              type="monotone"
+              dataKey="pets"
+              stroke="hsl(var(--chart-4))"
+              name="Pets (L)"
+              strokeWidth={2}
+            />
+          )}
         </ComposedChart>
       </ResponsiveContainer>
     </Card>

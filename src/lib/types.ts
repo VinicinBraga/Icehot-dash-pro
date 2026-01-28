@@ -18,7 +18,15 @@ export interface KpiData {
   equipamentos_utilizados: number;
   garrafas_poupadas: number;
   co2_poupado_kg: number;
+  modules: {
+    fria: boolean;
+    quente: boolean;
+    pets: boolean;
+    aspersor: boolean;
+  };
+
   _period?: { from: string; to: string; email: string };
+  
 }
 
 // === Séries (recharts) ===

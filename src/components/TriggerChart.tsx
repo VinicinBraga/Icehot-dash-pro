@@ -14,15 +14,43 @@ import { formatNumber } from "@/lib/format";
 import type { SeriesData } from "@/lib/types";
 import { mockTriggerSeries } from "@/lib/mockData";
 
-export function TriggerChart({ data }: { data?: SeriesData }) {
+type Modules = {
+  agua_gelada?: number | boolean; // backend manda 0/1
+  agua_quente?: number | boolean;
+  agua_pet?: number | boolean;
+  aspersor?: number | boolean; // backend manda 0/1
+};
+
+export function TriggerChart({
+  data,
+  modules,
+}: {
+  data?: SeriesData;
+  modules?: Modules;
+}) {
   const series = data ?? mockTriggerSeries;
+  const asBool = (v: unknown, fallback = true) => {
+    if (v === undefined || v === null) return fallback;
+    if (v === true || v === 1 || v === "1") return true;
+    if (v === false || v === 0 || v === "0") return false;
+    return fallback;
+  };
+  // ✅ defaults: se não vier modules, mostra tudo
+  const m = {
+    fria: asBool(modules?.agua_gelada, true),
+    quente: asBool(modules?.agua_quente, true),
+    pets: asBool(modules?.agua_pet, true),
+    aspersor: asBool(modules?.aspersor, false), // ✅ default do aspersor: NÃO mostrar se não vier
+  };
+
   const dataPoints = series.labels.map((label, idx) => ({
     name: label,
     total: series.series[0]?.values[idx] ?? 0,
-    fria: series.series[1]?.values[idx] ?? 0,
-    quente: series.series[2]?.values[idx] ?? 0,
-    pets: series.series[3]?.values[idx] ?? 0,
-    aspersor: series.series[4]?.values[idx] ?? 0,
+    fria: m.fria ? series.series[1]?.values[idx] ?? 0 : undefined,
+    quente: m.quente ? series.series[2]?.values[idx] ?? 0 : undefined,
+    pets: m.pets ? series.series[3]?.values[idx] ?? 0 : undefined,
+    // ✅ aspersor agora segue a mesma regra (some quando não tiver)
+    aspersor: m.aspersor ? series.series[4]?.values[idx] ?? 0 : undefined,
   }));
 
   return (
@@ -45,35 +73,48 @@ export function TriggerChart({ data }: { data?: SeriesData }) {
             }}
           />
           <Legend />
+
           <Bar dataKey="total" fill="hsl(var(--chart-1))" name="Total" />
-          <Line
-            type="monotone"
-            dataKey="fria"
-            stroke="hsl(var(--chart-2))"
-            name="Fria"
-            strokeWidth={2}
-          />
-          <Line
-            type="monotone"
-            dataKey="quente"
-            stroke="hsl(var(--chart-3))"
-            name="Quente"
-            strokeWidth={2}
-          />
-          <Line
-            type="monotone"
-            dataKey="pets"
-            stroke="hsl(var(--chart-4))"
-            name="Pets"
-            strokeWidth={2}
-          />
-          <Line
-            type="monotone"
-            dataKey="aspersor"
-            stroke="hsl(var(--chart-5))"
-            name="Aspersor"
-            strokeWidth={2}
-          />
+
+          {m.fria && (
+            <Line
+              type="monotone"
+              dataKey="fria"
+              stroke="hsl(var(--chart-2))"
+              name="Fria"
+              strokeWidth={2}
+            />
+          )}
+
+          {m.quente && (
+            <Line
+              type="monotone"
+              dataKey="quente"
+              stroke="hsl(var(--chart-3))"
+              name="Quente"
+              strokeWidth={2}
+            />
+          )}
+
+          {m.pets && (
+            <Line
+              type="monotone"
+              dataKey="pets"
+              stroke="hsl(var(--chart-4))"
+              name="Pets"
+              strokeWidth={2}
+            />
+          )}
+
+          {m.aspersor && (
+            <Line
+              type="monotone"
+              dataKey="aspersor"
+              stroke="hsl(var(--chart-5))"
+              name="Aspersor"
+              strokeWidth={2}
+            />
+          )}
         </ComposedChart>
       </ResponsiveContainer>
     </Card>

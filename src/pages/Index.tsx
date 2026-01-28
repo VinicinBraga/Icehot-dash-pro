@@ -115,6 +115,34 @@ const Index = () => {
   // helper visão geral
   const val = (n?: number) => (kpisLoading || !kpis ? 0 : n ?? 0);
 
+  const modules = kpis?.modules;
+
+  // ✅ Normaliza módulos para o formato que os charts esperam
+  // (se o backend mandar 0/1 ou boolean, a gente converte pra boolean)
+  const asBool = (v: any, fallback = true) => {
+    if (v === undefined || v === null) return fallback;
+    if (v === true || v === 1 || v === "1") return true;
+    if (v === false || v === 0 || v === "0") return false;
+    return fallback;
+  };
+
+  // ⚠️ Aqui tratamos os dois formatos possíveis:
+  // - antigo: { quente, pets, aspersor }
+  // - novo: { agua_gelada, agua_quente, agua_pet, aspersor }
+  const modulesForCharts = {
+    fria: asBool((modules as any)?.fria ?? (modules as any)?.agua_gelada, true),
+    quente: asBool(
+      (modules as any)?.quente ?? (modules as any)?.agua_quente,
+      true
+    ),
+    pets: asBool((modules as any)?.pets ?? (modules as any)?.agua_pet, true),
+    aspersor: asBool((modules as any)?.aspersor, false), // default: não mostra se não vier
+  };
+  const modulesUI = modulesForCharts;
+  useEffect(() => {
+    console.log("KPI modules (raw) =>", kpis?.modules);
+    console.log("modulesUI =>", modulesUI);
+  }, [kpis, modulesUI]);
   // helper localização
   const valLoc = (n?: number) =>
     locationKpis.loading || !locationKpis.data ? 0 : n ?? 0;
@@ -455,7 +483,7 @@ const Index = () => {
             )}
 
             {/* Water KPIs */}
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="grid gap-4 [grid-template-columns:repeat(auto-fit,minmax(240px,1fr))]">
               <KpiCard
                 label="Total – Litros de Água"
                 value={val(kpis?.water.total)}
@@ -464,6 +492,7 @@ const Index = () => {
                 formatter={formatLiters}
                 icon={<Droplet />}
               />
+
               <KpiCard
                 label="Água Fria"
                 value={val(kpis?.water.fria)}
@@ -472,26 +501,32 @@ const Index = () => {
                 formatter={formatLiters}
                 icon={<Snowflake />}
               />
-              <KpiCard
-                label="Água Quente"
-                value={val(kpis?.water.quente)}
-                helpText="Litros de água quente"
-                suffix="L"
-                formatter={formatLiters}
-                icon={<Flame />}
-              />
-              <KpiCard
-                label="Pets"
-                value={val(kpis?.water.pets)}
-                helpText="Litros para pets"
-                suffix="L"
-                formatter={formatLiters}
-                icon={<PawPrint />}
-              />
+
+              {modulesUI.quente && (
+                <KpiCard
+                  label="Água Quente"
+                  value={val(kpis?.water.quente)}
+                  helpText="Litros de água quente"
+                  suffix="L"
+                  formatter={formatLiters}
+                  icon={<Flame />}
+                />
+              )}
+
+              {modulesUI.pets && (
+                <KpiCard
+                  label="Pets"
+                  value={val(kpis?.water.pets)}
+                  helpText="Litros para pets"
+                  suffix="L"
+                  formatter={formatLiters}
+                  icon={<PawPrint />}
+                />
+              )}
             </div>
 
             {/* Trigger KPIs */}
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+            <div className="grid gap-4 [grid-template-columns:repeat(auto-fit,minmax(240px,1fr))]">
               <KpiCard
                 label="Total – Acionamentos"
                 value={val(kpis?.triggers.total)}
@@ -499,6 +534,7 @@ const Index = () => {
                 formatter={formatClicks}
                 icon={<Activity />}
               />
+
               <KpiCard
                 label="Acionamento – Fria"
                 value={val(kpis?.triggers.fria)}
@@ -506,27 +542,36 @@ const Index = () => {
                 formatter={formatClicks}
                 icon={<Snowflake />}
               />
-              <KpiCard
-                label="Acionamento – Quente"
-                value={val(kpis?.triggers.quente)}
-                helpText="Acionamentos água quente"
-                formatter={formatClicks}
-                icon={<Flame />}
-              />
-              <KpiCard
-                label="Acionamento – Pets"
-                value={val(kpis?.triggers.pets)}
-                helpText="Acionamentos pets"
-                formatter={formatClicks}
-                icon={<PawPrint />}
-              />
-              <KpiCard
-                label="Acionamento – Aspersor"
-                value={val(kpis?.triggers.aspersor)}
-                helpText="Acionamentos do aspersor"
-                formatter={formatClicks}
-                icon={<Activity />}
-              />
+
+              {modulesUI.quente && (
+                <KpiCard
+                  label="Acionamento – Quente"
+                  value={val(kpis?.triggers.quente)}
+                  helpText="Acionamentos água quente"
+                  formatter={formatClicks}
+                  icon={<Flame />}
+                />
+              )}
+
+              {modulesUI.pets && (
+                <KpiCard
+                  label="Acionamento – Pets"
+                  value={val(kpis?.triggers.pets)}
+                  helpText="Acionamentos pets"
+                  formatter={formatClicks}
+                  icon={<PawPrint />}
+                />
+              )}
+
+              {modulesUI.aspersor && (
+                <KpiCard
+                  label="Acionamento – Aspersor"
+                  value={val(kpis?.triggers.aspersor)}
+                  helpText="Acionamentos do aspersor"
+                  formatter={formatClicks}
+                  icon={<Activity />}
+                />
+              )}
             </div>
 
             {/* Extras */}
@@ -556,8 +601,14 @@ const Index = () => {
 
             {/* Charts */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              <WaterChart data={water.data ?? undefined} />
-              <TriggerChart data={trig.data ?? undefined} />
+              <WaterChart
+                data={water.data ?? undefined}
+                modules={modulesForCharts}
+              />
+              <TriggerChart
+                data={trig.data ?? undefined}
+                modules={modulesForCharts}
+              />
             </div>
 
             <ModelPieChart data={modelPie.data ?? undefined} />

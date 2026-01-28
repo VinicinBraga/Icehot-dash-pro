@@ -13,8 +13,9 @@ import type {
 import { getToken, clearToken } from "./auth"; // ← usa o token real do login
 
 /** ========= Base da API ========= **/
-const API_BASE_URL = (
-  import.meta.env.VITE_API_URL?.toString() || "http://localhost:3001"
+const API_BASE_URL =   (import.meta.env.DEV
+  ? "http://localhost:3001"
+  : import.meta.env.VITE_API_URL?.toString() || "http://localhost:3001"
 ).replace(/\/+$/, "");
 
 /** ========= Utils ========= **/
@@ -65,21 +66,17 @@ export async function apiFetch(
 ): Promise<Response> {
   const token = getToken();
 
-  const headers: HeadersInit = {
-    ...(options.headers || {}),
-  };
+  // ✅ Sempre trabalha com Headers (não com HeadersInit misto)
+  const headers = new Headers(options.headers || undefined);
 
   // Define Content-Type se tiver body e ainda não estiver definido
-  if (
-    options.body &&
-    !(headers["Content-Type"] || (headers as any)["content-type"])
-  ) {
-    headers["Content-Type"] = "application/json";
+  if (options.body && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
   }
 
-  // 🔑 Agora só envia Authorization (nunca mais X-User-Email)
+  // 🔑 Sempre seta Authorization quando tiver token
   if (token) {
-    (headers as any)["Authorization"] = `Bearer ${token}`;
+    headers.set("Authorization", `Bearer ${token}`);
   }
 
   const res = await fetch(buildUrl(pathOrUrl), {
@@ -100,6 +97,7 @@ export async function apiFetch(
 
   return res;
 }
+
 
 /** ========= Helpers JSON ========= **/
 async function jsonOrThrow<T>(res: Response, label: string): Promise<T> {

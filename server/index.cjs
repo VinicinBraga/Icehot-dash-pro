@@ -6,6 +6,15 @@ const { pool } = require("./db.cjs");
 const jwt = require("jsonwebtoken");
 const JWT_SECRET =
   process.env.JWT_SECRET || "icehot-dashboard-super-secret-2025";
+console.log(
+  "TOKEN DEBUG (startup):",
+  jwt.sign(
+    { id: 198, email: "user01@teste.com.br", isMaster: false },
+    JWT_SECRET,
+    { expiresIn: "7d" }
+  )
+);
+
 const bcrypt = require("bcryptjs");
 const app = express();
 const fetch = require("node-fetch");
@@ -15,6 +24,7 @@ const {
   getWaterSeriesFromBigQuery,
   getTriggerSeriesFromBigQuery,
   getEquipmentAggregatesFromBigQuery,
+  getAspersorPresenceFromBigQuery,
 } = require("./bigquery");
 
 const MASTER_EMAILS = [
@@ -76,7 +86,14 @@ function signToken(user) {
     email: user.email,
     isMaster,
   };
-
+  console.log(
+    "TOKEN DEBUG:",
+    jwt.sign(
+      { id: 198, email: "user01@teste.com.br", isMaster: false },
+      JWT_SECRET,
+      { expiresIn: "7d" }
+    )
+  );
   return jwt.sign(payload, JWT_SECRET, { expiresIn: "7d" });
 }
 
@@ -197,19 +214,35 @@ async function resolveMachineIds(userEmail, q = {}, isMaster = false) {
 
   let baseIds = [];
 
-  if (isMaster) {
+  // ✅ PRIORIDADE: se vier ?usuario=123, usamos a visão daquele usuário
+  // (mesmo se o caller for master). Isso garante filtros corretos e modules corretos.
+  if (usuario) {
+    const [rows] = await pool.query(
+      `
+      SELECT ue.maquina_id
+        FROM usuarios_equipamentos ue
+        JOIN maquinas m ON m.id = ue.maquina_id
+       WHERE ue.usuario_id = ?
+         AND m.status <> 3
+      `,
+      [usuario]
+    );
+    baseIds = rows.map((r) => r.maquina_id);
+  } else if (isMaster) {
     const [rows] = await pool.query(
       `SELECT id FROM maquinas WHERE status <> 3`
     );
     baseIds = rows.map((r) => r.id);
   } else {
     const [baseRows] = await pool.query(
-      `SELECT ue.maquina_id
-         FROM users u
-         JOIN usuarios_equipamentos ue ON ue.usuario_id = u.id
-         JOIN maquinas m ON m.id = ue.maquina_id
-        WHERE u.email = ?
-          AND m.status <> 3`,
+      `
+      SELECT ue.maquina_id
+        FROM users u
+        JOIN usuarios_equipamentos ue ON ue.usuario_id = u.id
+        JOIN maquinas m ON m.id = ue.maquina_id
+       WHERE u.email = ?
+         AND m.status <> 3
+      `,
       [userEmail]
     );
     baseIds = baseRows.map((r) => r.maquina_id);
@@ -217,10 +250,12 @@ async function resolveMachineIds(userEmail, q = {}, isMaster = false) {
 
   if (!baseIds.length) return [];
 
+  // filtro de equipamento tem precedência
   if (equipamento) {
     return baseIds.includes(equipamento) ? [equipamento] : [];
   }
 
+  // filtros adicionais em cima do conjunto base
   const where = [`m.id IN (?)`, `m.status <> 3`];
   const params = [baseIds];
 
@@ -234,13 +269,9 @@ async function resolveMachineIds(userEmail, q = {}, isMaster = false) {
     params.push(serie, serie);
   }
 
-  if (usuario) {
-    where.push(`EXISTS (
-      SELECT 1 FROM usuarios_equipamentos ue
-      WHERE ue.usuario_id = ? AND ue.maquina_id = m.id
-    )`);
-    params.push(usuario);
-  }
+  // ⚠️ Removido:
+  // if (usuario) EXISTS(...) ...
+  // Porque quando usuario está presente, baseIds já são desse usuario.
 
   if (status) {
     const s = String(status).trim().toLowerCase();
@@ -281,9 +312,11 @@ async function resolveMachineIds(userEmail, q = {}, isMaster = false) {
           : baseIds.filter((id) => !activeSet.has(id));
 
       if (!baseIds.length) return [];
+
+      // atualiza o IN (?) com o novo conjunto filtrado
       params[0] = baseIds;
     } else {
-      // mantém seu comportamento atual para status textual (se existir)
+      // mantém comportamento anterior (se existir status textual)
       where.push(`LOWER(TRIM(m.status)) = ?`);
       params.push(s);
     }
@@ -299,13 +332,27 @@ async function resolveMachineIds(userEmail, q = {}, isMaster = false) {
 
 const PUBLIC_PATHS = new Set(["/api/_debug/ping", "/api/health"]);
 
+// ===== DEV AUTH BYPASS (LOCAL ONLY)
+app.use((req, res, next) => {
+  if (process.env.BYPASS_AUTH === "1") {
+    req.userEmail = req.header("x-user-email") || "contato@icehot.net.br";
+    req.isMaster = String(req.header("x-is-master") || "true") === "true";
+  }
+  next();
+});
+
 /* ---------------------- Middleware Auth JWT ---------------------- */
 
 app.use((req, res, next) => {
   if (req.method === "OPTIONS") return res.sendStatus(204);
   if (PUBLIC_PATHS.has(req.path)) return next();
   if (req.path === "/api/auth/login") return next();
-
+  if (process.env.BYPASS_AUTH === "1") {
+    req.userId = 0;
+    req.userEmail = req.header("x-user-email") || "contato@icehot.net.br";
+    req.isMaster = String(req.header("x-is-master") || "true") === "true";
+    return next();
+  }
   const auth = req.header("authorization");
   const legacyEmail = req.header("x-user-email");
 
@@ -435,6 +482,14 @@ app.get("/api/kpis", async (req, res) => {
       req.isMaster
     );
 
+    console.log("DEBUG /api/kpis machineIds", {
+      userEmail,
+      isMaster: req.isMaster,
+      query: req.query,
+      machineIdsCount: machineIds?.length || 0,
+      machineIdsSample: (machineIds || []).slice(0, 10),
+    });
+
     if (!machineIds.length) {
       return res.json({
         water: { total: 0, fria: 0, quente: 0, pets: 0 },
@@ -442,28 +497,52 @@ app.get("/api/kpis", async (req, res) => {
         equipamentos_utilizados: 0,
         garrafas_poupadas: 0,
         co2_poupado_kg: 0,
-        modules: { fria: false, quente: false, pets: false }, // 👈 add
+        modules: { fria: false, quente: false, pets: false, aspersor: false },
         _period: { from: fromStr, to: toStr, email: userEmail },
       });
     }
 
+    // ============================
+    // ✅ MODULES (MySQL)
+    // - Se vier ?usuario=123 (master filtrando), usa esse usuario_id
+    // - Se NÃO for master, usa o próprio req.userId (usuário logado)
+    // - Se for master e NÃO vier usuario na query, mantém "global" (IN máquina)
+    // ============================
     let modules = { fria: true, quente: true, pets: true }; // fallback
 
     if (machineIds?.length) {
-      // monta placeholders (?, ?, ?)
       const placeholders = machineIds.map(() => "?").join(",");
 
-      const [rows] = await pool.execute(
+      const usuarioQuery = asNum(req.query.usuario);
+      const usuarioFilter =
+        usuarioQuery || (!req.isMaster ? asNum(req.userId) : undefined);
+
+      const sql = usuarioFilter
+        ? `
+          SELECT
+            MAX(COALESCE(ue.agua_gelada, 0)) AS fria,
+            MAX(COALESCE(ue.agua_quente, 0)) AS quente,
+            MAX(COALESCE(ue.agua_pet, 0))    AS pets
+          FROM usuarios_equipamentos ue
+          JOIN maquinas m ON m.id = ue.maquina_id
+          WHERE ue.usuario_id = ?
+            AND ue.maquina_id IN (${placeholders})
         `
-    SELECT
-      MAX(COALESCE(agua_gelada, 0)) AS fria,
-      MAX(COALESCE(agua_quente, 0)) AS quente,
-      MAX(COALESCE(agua_pet, 0))    AS pets
-    FROM usuarios_equipamentos
-    WHERE maquina_id IN (${placeholders})
-    `,
-        machineIds
-      );
+        : `
+          SELECT
+            MAX(COALESCE(ue.agua_gelada, 0)) AS fria,
+            MAX(COALESCE(ue.agua_quente, 0)) AS quente,
+            MAX(COALESCE(ue.agua_pet, 0))    AS pets
+          FROM usuarios_equipamentos ue
+          JOIN maquinas m ON m.id = ue.maquina_id
+          WHERE ue.maquina_id IN (${placeholders})
+        `;
+
+      const params = usuarioFilter
+        ? [usuarioFilter, ...machineIds]
+        : machineIds;
+
+      const [rows] = await pool.execute(sql, params);
 
       const r = rows?.[0] || {};
       modules = {
@@ -471,8 +550,70 @@ app.get("/api/kpis", async (req, res) => {
         quente: Boolean(r.quente),
         pets: Boolean(r.pets),
       };
+      /*let aspersorEnabled = false;
+
+      try {
+        aspersorEnabled = await getAspersorPresenceFromBigQuery(
+          machineIds,
+          toStr
+        ); // retorna true / false
+      } catch (e) {
+        console.warn(
+          "Aviso: falha ao checar aspersor no BQ, mantendo false.",
+          e
+        );
+      }
+
+      modules = { ...modules, aspersor: aspersorEnabled };*/
     }
 
+    // ✅ DEV ONLY: quando estiver testando local sem credencial do BigQuery,
+    // devolve só o modules pra validar a lógica
+    if (
+      process.env.BYPASS_AUTH === "1" &&
+      String(req.query.onlyModules) === "1"
+    ) {
+      return res.json({
+        ok: true,
+        modules,
+        machineIdsCount: machineIds.length,
+        machineIdsSample: machineIds.slice(0, 10),
+        _period: { from: fromStr, to: toStr, email: userEmail },
+      });
+    }
+    let aspersorSelected = false;
+
+    try {
+      // se tiver 1 equipamento filtrado, consulta só ele
+      if (req.query.equipamento) {
+        const equipamentoId = Number(req.query.equipamento);
+
+        const resp = await fetch(
+          `http://localhost:7070/equipamentos/${equipamentoId}/modules`
+        );
+        const json = await resp.json();
+        aspersorSelected = Boolean(json?.data?.aspersor);
+      } else {
+        // ✅ sem filtro de equipamento: se QUALQUER máquina do usuário tiver aspersor=1 no cadastro, habilita
+        const checks = await Promise.all(
+          machineIds.map(async (id) => {
+            try {
+              const resp = await fetch(
+                `http://localhost:7070/equipamentos/${id}/modules`
+              );
+              const json = await resp.json();
+              return Boolean(json?.data?.aspersor);
+            } catch {
+              return false;
+            }
+          })
+        );
+
+        aspersorSelected = checks.some(Boolean);
+      }
+    } catch (e) {
+      console.warn("Falha ao consultar aspersor no cadastro:", e?.message || e);
+    }
     // 2) Agora buscamos os KPIs no BigQuery
     const row = await getKpisFromBigQuery(machineIds, fromStr, toStr);
     const aggRows = await getEquipmentAggregatesFromBigQuery(
@@ -480,6 +621,7 @@ app.get("/api/kpis", async (req, res) => {
       fromStr,
       toStr
     );
+
     const sum_v_fria = Number(row?.sum_v_fria || 0);
     const sum_v_quente = Number(row?.sum_v_quente || 0);
     const sum_v_pet = Number(row?.sum_v_pet || 0);
@@ -489,6 +631,7 @@ app.get("/api/kpis", async (req, res) => {
     const sum_c_pet = Number(row?.sum_c_pet || 0);
     const sum_c_asp = Number(row?.sum_c_asp || 0);
 
+    modules = { ...modules, aspersor: sum_c_asp > 0 || aspersorSelected };
     // Aqui JÁ são litros/dia prontos no BQ (não aplica LITERS_SCALE)
     const litros_fria = sum_v_fria;
     const litros_quente = sum_v_quente;
@@ -506,7 +649,6 @@ app.get("/api/kpis", async (req, res) => {
     const garrafas_poupadas = litros_total / BOTTLE_LITERS;
     const co2_poupado_kg = litros_total * CO2_PER_LITER_KG;
 
-    // Debug leve pra gente ver no log se algo vier zerado
     console.log("KPIs BQ debug:", {
       email: userEmail,
       fromStr,
