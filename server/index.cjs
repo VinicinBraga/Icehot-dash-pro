@@ -18,6 +18,10 @@ console.log(
 const bcrypt = require("bcryptjs");
 const app = express();
 const fetch = require("node-fetch");
+const CADASTRO_API_BASE = (
+  process.env.CADASTRO_API_BASE || "http://localhost:7070"
+).replace(/\/$/, "");
+
 const {
   getKpisFromBigQuery,
   getLitersByMachineFromBigQuery,
@@ -589,7 +593,7 @@ app.get("/api/kpis", async (req, res) => {
         const equipamentoId = Number(req.query.equipamento);
 
         const resp = await fetch(
-          `http://localhost:7070/equipamentos/${equipamentoId}/modules`
+          `${CADASTRO_API_BASE}/equipamentos/${equipamentoId}/modules`
         );
         const json = await resp.json();
         aspersorSelected = Boolean(json?.data?.aspersor);
@@ -599,7 +603,7 @@ app.get("/api/kpis", async (req, res) => {
           machineIds.map(async (id) => {
             try {
               const resp = await fetch(
-                `http://localhost:7070/equipamentos/${id}/modules`
+                `${CADASTRO_API_BASE}/equipamentos/${id}/modules`
               );
               const json = await resp.json();
               return Boolean(json?.data?.aspersor);
@@ -631,8 +635,8 @@ app.get("/api/kpis", async (req, res) => {
     const sum_c_pet = Number(row?.sum_c_pet || 0);
     const sum_c_asp = Number(row?.sum_c_asp || 0);
 
-    modules = { ...modules, aspersor: sum_c_asp > 0 || aspersorSelected };
-    // Aqui JÁ são litros/dia prontos no BQ (não aplica LITERS_SCALE)
+    modules = { ...modules, aspersor: aspersorSelected };
+
     const litros_fria = sum_v_fria;
     const litros_quente = sum_v_quente;
     const litros_pets = sum_v_pet;
@@ -641,7 +645,9 @@ app.get("/api/kpis", async (req, res) => {
     const trg_fria = sum_c_fria;
     const trg_quente = sum_c_quente;
     const trg_pets = sum_c_pet;
-    const trg_aspersor = sum_c_asp;
+
+    // regra nova: aspersor só conta se estiver selecionado no cadastro
+    const trg_aspersor = aspersorSelected ? sum_c_asp : 0;
     const trg_total = trg_fria + trg_quente + trg_pets + trg_aspersor;
 
     const equipamentos_utilizados = (aggRows || []).length;
@@ -682,8 +688,6 @@ app.get("/api/kpis", async (req, res) => {
     res.status(500).json({ error: String(e) });
   }
 });
-
-/* ===== Localização (mapa - por equipamento, alinhado com KPIs) ===== */
 
 app.get("/api/localizacao", async (req, res) => {
   try {
@@ -798,8 +802,6 @@ app.get("/api/localizacao", async (req, res) => {
     res.status(500).json({ error: String(e) });
   }
 });
-
-/* -------------------- Séries Water / Triggers -------------------- */
 
 app.get("/api/series/water", async (req, res) => {
   try {
@@ -932,6 +934,38 @@ app.get("/api/series/triggers", async (req, res) => {
         _period: { from: fromStr, to: toStr, email: userEmail },
       });
     }
+    // ✅ aspersor só aparece se estiver selecionado no cadastro
+    let aspersorSelected = false;
+    try {
+      if (req.query.equipamento) {
+        const equipamentoId = Number(req.query.equipamento);
+        const resp = await fetch(
+          `${CADASTRO_API_BASE}/equipamentos/${equipamentoId}/modules`
+        );
+        const json = await resp.json();
+        aspersorSelected = Boolean(json?.data?.aspersor);
+      } else {
+        const checks = await Promise.all(
+          machineIds.map(async (id) => {
+            try {
+              const resp = await fetch(
+                `${CADASTRO_API_BASE}/equipamentos/${id}/modules`
+              );
+              const json = await resp.json();
+              return Boolean(json?.data?.aspersor);
+            } catch {
+              return false;
+            }
+          })
+        );
+        aspersorSelected = checks.some(Boolean);
+      }
+    } catch (e) {
+      console.warn(
+        "Falha ao consultar aspersor no cadastro (series/triggers):",
+        e?.message || e
+      );
+    }
 
     // 2) Busca as séries mensais no BigQuery
     const rows = await getTriggerSeriesFromBigQuery(machineIds, fromStr, toStr);
@@ -949,18 +983,23 @@ app.get("/api/series/triggers", async (req, res) => {
     const series = [
       {
         key: "total",
-        values: rows.map(
-          (r) =>
-            Number(r.sum_c_fria || 0) +
-            Number(r.sum_c_quente || 0) +
-            Number(r.sum_c_pet || 0) +
-            Number(r.sum_c_asp || 0)
-        ),
+        values: rows.map((r) => {
+          const fria = Number(r.sum_c_fria || 0);
+          const quente = Number(r.sum_c_quente || 0);
+          const pet = Number(r.sum_c_pet || 0);
+          const asp = aspersorSelected ? Number(r.sum_c_asp || 0) : 0;
+          return fria + quente + pet + asp;
+        }),
       },
       { key: "fria", values: rows.map((r) => Number(r.sum_c_fria || 0)) },
       { key: "quente", values: rows.map((r) => Number(r.sum_c_quente || 0)) },
       { key: "pets", values: rows.map((r) => Number(r.sum_c_pet || 0)) },
-      { key: "aspersor", values: rows.map((r) => Number(r.sum_c_asp || 0)) },
+      {
+        key: "aspersor",
+        values: rows.map((r) =>
+          aspersorSelected ? Number(r.sum_c_asp || 0) : 0
+        ),
+      },
     ];
 
     // Debug útil
@@ -982,8 +1021,6 @@ app.get("/api/series/triggers", async (req, res) => {
     res.status(500).json({ error: String(e) });
   }
 });
-
-/* -------- Séries - Instalações por mês / Acumulado -------- */
 
 app.get("/api/series/installations", async (req, res) => {
   try {
@@ -1172,8 +1209,6 @@ app.get("/api/series/equipment-cumulative", async (req, res) => {
   }
 });
 
-/* ---------------------- Pie de Modelos ---------------------- */
-
 app.get("/api/models/pie", async (req, res) => {
   try {
     const userEmail = req.userEmail;
@@ -1273,8 +1308,6 @@ app.get("/api/models/pie", async (req, res) => {
     res.status(500).json({ error: String(e) });
   }
 });
-
-/* ---------------------- Tabela: Litros x Equip ---------------------- */
 
 app.get("/api/tables/water-by-equipment", async (req, res) => {
   try {
@@ -1381,8 +1414,6 @@ app.get("/api/tables/water-by-equipment", async (req, res) => {
   }
 });
 
-/* ----------------- Tabela: Lista de Equipamentos ----------------- */
-
 app.get("/api/tables/equipment-list", async (req, res) => {
   try {
     const userEmail = req.userEmail;
@@ -1481,8 +1512,6 @@ app.get("/api/tables/equipment-list", async (req, res) => {
   }
 });
 
-/* ---------- Tabela: Acionamentos x Equipamentos ---------- */
-
 app.get("/api/tables/triggers-by-equipment", async (req, res) => {
   try {
     const userEmail = req.userEmail;
@@ -1515,7 +1544,21 @@ app.get("/api/tables/triggers-by-equipment", async (req, res) => {
       });
     }
 
-    // 1) Busca acionamentos por máquina no BigQuery
+    const aspersorByMachine = new Map();
+
+    await Promise.all(
+      machineIds.map(async (id) => {
+        try {
+          const resp = await fetch(
+            `${CADASTRO_API_BASE}/equipamentos/${id}/modules`
+          );
+          const json = await resp.json();
+          aspersorByMachine.set(id, Boolean(json?.data?.aspersor));
+        } catch {
+          aspersorByMachine.set(id, false);
+        }
+      })
+    );
     const aggRows = await getEquipmentAggregatesFromBigQuery(
       machineIds,
       fromStr,
@@ -1537,11 +1580,13 @@ app.get("/api/tables/triggers-by-equipment", async (req, res) => {
 
     for (const r of aggRows) {
       const id = Number(r.maquina_id);
+      const aspEnabled = aspersorByMachine.get(id) === true;
+
       const acionamentos =
         Number(r.sum_c_fria || 0) +
         Number(r.sum_c_quente || 0) +
         Number(r.sum_c_pet || 0) +
-        Number(r.sum_c_asp || 0);
+        (aspEnabled ? Number(r.sum_c_asp || 0) : 0);
 
       triggersByMachine.set(id, acionamentos);
       idsFromAgg.push(id);
@@ -1588,8 +1633,6 @@ app.get("/api/tables/triggers-by-equipment", async (req, res) => {
     res.status(500).json({ error: String(e) });
   }
 });
-
-/* --------------------- KPIs e Summary de Localização --------------------- */
 
 app.get("/api/kpis/equipment", async (req, res) => {
   try {
@@ -1905,8 +1948,6 @@ app.get("/api/location/summary", async (req, res) => {
   }
 });
 
-/* ------------------------- Filtros Options ------------------------- */
-
 app.get("/api/filters", async (req, res) => {
   try {
     const userEmail = req.userEmail;
@@ -2036,8 +2077,6 @@ app.get("/api/filters", async (req, res) => {
   }
 });
 
-/* ----------------------------- Debug ----------------------------- */
-
 app.get("/api/_debug/user-machines", async (req, res) => {
   try {
     const email = req.userEmail;
@@ -2057,8 +2096,6 @@ app.get("/api/_debug/user-machines", async (req, res) => {
     res.status(500).json({ error: String(e) });
   }
 });
-
-/* ----------------------------- Boot ----------------------------- */
 
 const PORT = Number(process.env.PORT) || 8080;
 app.listen(PORT, () => {
