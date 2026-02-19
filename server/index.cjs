@@ -689,120 +689,6 @@ app.get("/api/kpis", async (req, res) => {
   }
 });
 
-app.get("/api/localizacao", async (req, res) => {
-  try {
-    const userEmail = req.userEmail || req.header("x-user-email");
-    const { from, to } = req.query;
-
-    if (!userEmail && !req.isMaster) {
-      return res.status(401).json({ error: "Não autenticado" });
-    }
-
-    // intervalo padrão: últimos 30 dias
-    const defaultTo = new Date();
-    const defaultFrom = new Date();
-    defaultFrom.setDate(defaultFrom.getDate() - 30);
-
-    const toStr =
-      typeof to === "string" && to ? to : defaultTo.toISOString().slice(0, 10);
-    const fromStr =
-      typeof from === "string" && from
-        ? from
-        : defaultFrom.toISOString().slice(0, 10);
-
-    // 0) máquinas visíveis pro usuário / filtros
-    const machineIds = await resolveMachineIds(
-      userEmail,
-      req.query,
-      req.isMaster
-    );
-
-    if (!machineIds.length) {
-      return res.json({
-        points: [],
-        _period: { from: fromStr, to: toStr, email: userEmail },
-      });
-    }
-
-    // 1) litros por máquina no BigQuery (NOVA FONTE)
-    const litersRows = await getLitersByMachineFromBigQuery(
-      machineIds,
-      fromStr,
-      toStr
-    );
-
-    const litersByMachine = new Map();
-    for (const r of litersRows || []) {
-      const mid = Number(r.maquina_id);
-      const litros = Number(r.litros || 0); // já vem em litros do BQ
-      litersByMachine.set(mid, litros);
-    }
-
-    // 2) metadados das máquinas (cidade/UF, nome, status) ainda via MySQL
-    const [machines] = await pool.query(
-      `
-      SELECT
-        m.id,
-        COALESCE(m.nome, CONCAT('EQP-', m.id)) AS equipamento,
-        c.nome AS cidade,
-        c.uf   AS uf,
-        m.status
-      FROM maquinas m
-      LEFT JOIN cidades c ON c.id = m.cidade_id
-      WHERE m.id IN (?)
-      `,
-      [machineIds]
-    );
-
-    // 3) monta os pontos que o front usa no mapa
-    const points = await Promise.all(
-      (machines || []).map(async (m) => {
-        const mid = Number(m.id);
-        const litros = Number(litersByMachine.get(mid) || 0);
-
-        // Normaliza status vindo do banco
-        let statusNorm = (m.status ?? "").toString().trim().toLowerCase();
-
-        // Se vier como código numérico (0 / 2), converte
-        const sNum = Number(statusNorm);
-        if (!Number.isNaN(sNum)) {
-          if (sNum === 0) statusNorm = "ativo";
-          else if (sNum === 2) statusNorm = "inativo";
-        }
-
-        // Se teve consumo no período, consideramos ativo
-        if (litros > 0) {
-          statusNorm = "ativo";
-        }
-
-        const status = statusNorm === "ativo" ? "Ativo" : "Inativo";
-
-        // Coordenadas (cacheadas) da cidade
-        const coords = await getCityCoords(pool, m.cidade, m.uf);
-
-        return {
-          lat: coords.lat,
-          lng: coords.lng,
-          cidade: m.cidade || "Sem Cidade",
-          uf: m.uf || "",
-          qtd: 1,
-          status,
-          litros,
-          equipamento: m.equipamento,
-        };
-      })
-    );
-
-    res.json({
-      points,
-      _period: { from: fromStr, to: toStr, email: userEmail },
-    });
-  } catch (e) {
-    console.error("Erro em /api/localizacao:", e);
-    res.status(500).json({ error: String(e) });
-  }
-});
-
 app.get("/api/series/water", async (req, res) => {
   try {
     const userEmail = req.userEmail || req.header("x-user-email");
@@ -1479,27 +1365,25 @@ app.get("/api/tables/equipment-list", async (req, res) => {
       LEFT JOIN tipos t ON m.tipo_id = t.id
       WHERE m.id IN (?)
       `,
-      [usedIds]
+      [visibleMachineIds]
     );
-
+    
     const formatted = rowsRaw.map((r) => {
       const dataInst = r.data_instalacao ? new Date(r.data_instalacao) : null;
       if (dataInst) dataInst.setMonth(dataInst.getMonth() + 6);
-
-      const proxTroca = dataInst
-        ? dataInst.toISOString().slice(0, 10)
-        : "Sem data";
-
+    
+      const proxTroca = dataInst ? dataInst.toISOString().slice(0, 10) : "Sem data";
+    
       const statusNum = Number(r.status);
-
+    
       let statusFormatado;
       if (statusNum === 0) statusFormatado = "Ativo";
       else if (statusNum === 1 || statusNum === 2) statusFormatado = "Inativo";
       else statusFormatado = "Desconhecido";
-
+    
       return [r.equipamento, r.modelo, statusFormatado, proxTroca];
     });
-
+    
     return res.json({
       columns: ["Equipamento", "Modelo", "Status", "Próx. troca filtro"],
       rows: formatted,
@@ -1662,30 +1546,10 @@ app.get("/api/kpis/equipment", async (req, res) => {
       });
     }
 
-    // 2) ✅ restringe para “máquinas com fato no período” (BigQuery)
-    const aggRows = await getEquipmentAggregatesFromBigQuery(
-      visibleMachineIds,
-      fromStr,
-      toStr
-    );
-
-    const usedIds = (aggRows || [])
-      .map((r) => Number(r.maquina_id))
-      .filter(Boolean);
-
-    if (!usedIds.length) {
-      return res.json({
-        total_equipamentos: 0,
-        ativos: 0,
-        inativos: 0,
-        _period: { from: fromStr, to: toStr, email: userEmail },
-      });
-    }
-
-    // 3) status (MySQL) apenas desses usados
+    // 2) status (MySQL) de TODOS os visíveis
     const [statusRows] = await pool.query(
       `SELECT m.status FROM maquinas m WHERE m.id IN (?)`,
-      [usedIds]
+      [visibleMachineIds]
     );
 
     let ativos = 0;
@@ -1708,6 +1572,144 @@ app.get("/api/kpis/equipment", async (req, res) => {
     res.status(500).json({ error: String(e) });
   }
 });
+
+app.get("/api/localizacao", async (req, res) => {
+  try {
+    const userEmail = req.userEmail || req.header("x-user-email");
+    const { from, to } = req.query;
+
+    if (!userEmail && !req.isMaster) {
+      return res.status(401).json({ error: "Não autenticado" });
+    }
+
+    // intervalo padrão: últimos 30 dias
+    const defaultTo = new Date();
+    const defaultFrom = new Date();
+    defaultFrom.setDate(defaultFrom.getDate() - 30);
+
+    const toStr =
+      typeof to === "string" && to ? to : defaultTo.toISOString().slice(0, 10);
+    const fromStr =
+      typeof from === "string" && from
+        ? from
+        : defaultFrom.toISOString().slice(0, 10);
+
+    // 0) máquinas visíveis pro usuário / filtros
+    const machineIds = await resolveMachineIds(
+      userEmail,
+      req.query,
+      req.isMaster
+    );
+
+    if (!machineIds.length) {
+      return res.json({
+        points: [],
+        _period: { from: fromStr, to: toStr, email: userEmail },
+      });
+    }
+
+    // 1) litros por máquina no BigQuery
+    const litersRows = await getLitersByMachineFromBigQuery(
+      machineIds,
+      fromStr,
+      toStr
+    );
+
+    const litersByMachine = new Map();
+    for (const r of litersRows || []) {
+      const mid = Number(r.maquina_id);
+      const litros = Number(r.litros || 0);
+      litersByMachine.set(mid, litros);
+    }
+
+    // 2) metadados das máquinas (cidade/UF, nome, status) + observacao
+    const [machines] = await pool.query(
+      `
+      SELECT
+        m.id,
+        COALESCE(m.nome, CONCAT('EQP-', m.id)) AS equipamento,
+        c.nome AS cidade,
+        c.uf   AS uf,
+        m.status,
+        m.observacao
+      FROM maquinas m
+      LEFT JOIN cidades c ON c.id = m.cidade_id
+      WHERE m.id IN (?)
+      `,
+      [machineIds]
+    );
+
+    // helper: tenta extrair lat/lng do JSON em observacao
+    function extractLatLngFromObs(obs) {
+      try {
+        const obj = obs ? JSON.parse(String(obs)) : null;
+        if (!obj || typeof obj !== "object") return { lat: null, lng: null };
+
+        const latNum = obj.lat === "" || obj.lat == null ? null : Number(obj.lat);
+        const lngNum = obj.lng === "" || obj.lng == null ? null : Number(obj.lng);
+
+        if (Number.isFinite(latNum) && Number.isFinite(lngNum)) {
+          return { lat: latNum, lng: lngNum };
+        }
+      } catch {
+        // ignore
+      }
+      return { lat: null, lng: null };
+    }
+
+    // 3) monta os pontos do mapa
+    const points = await Promise.all(
+      (machines || []).map(async (m) => {
+        const mid = Number(m.id);
+        const litros = Number(litersByMachine.get(mid) || 0);
+
+        // Normaliza status vindo do banco
+        let statusNorm = (m.status ?? "").toString().trim().toLowerCase();
+
+        // Se vier como código numérico (0 / 2), converte
+        const sNum = Number(statusNorm);
+        if (!Number.isNaN(sNum)) {
+          if (sNum === 0) statusNorm = "ativo";
+          else if (sNum === 2) statusNorm = "inativo";
+        }
+
+        const status = statusNorm === "ativo" ? "Ativo" : "Inativo";
+
+        // ✅ 1) tenta coordenada específica do equipamento (observacao.lat/lng)
+        const eqCoords = extractLatLngFromObs(m.observacao);
+
+        // ✅ 2) fallback: coordenada da cidade/UF (city_coords)
+        let cityCoords = { lat: null, lng: null };
+        if (eqCoords.lat == null || eqCoords.lng == null) {
+          cityCoords = await getCityCoords(pool, m.cidade, m.uf);
+        }
+
+        const latFinal = eqCoords.lat ?? cityCoords.lat;
+        const lngFinal = eqCoords.lng ?? cityCoords.lng;
+
+        return {
+          lat: latFinal,
+          lng: lngFinal,
+          cidade: m.cidade || "Sem Cidade",
+          uf: m.uf || "",
+          qtd: 1,
+          status,
+          litros,
+          equipamento: m.equipamento,
+        };
+      })
+    );
+
+    res.json({
+      points,
+      _period: { from: fromStr, to: toStr, email: userEmail },
+    });
+  } catch (e) {
+    console.error("Erro em /api/localizacao:", e);
+    res.status(500).json({ error: String(e) });
+  }
+});
+
 
 app.get("/api/location/kpis", async (req, res) => {
   try {
@@ -1741,41 +1743,26 @@ app.get("/api/location/kpis", async (req, res) => {
       });
     }
 
-    // 2) ✅ restringe para “máquinas com fato no período” (BigQuery)
-    const aggRows = await getEquipmentAggregatesFromBigQuery(
-      visibleMachineIds,
-      fromStr,
-      toStr
-    );
-
-    const usedIds = (aggRows || [])
-      .map((r) => Number(r.maquina_id))
-      .filter(Boolean);
-
-    if (!usedIds.length) {
-      return res.json({
-        users_total: 0,
-        equipamentos_ativos: 0,
-        equipamentos_inativos: 0,
-        _period: { from: fromStr, to: toStr, email: userEmail },
-      });
-    }
-
-    // 3) cidades (agora só das usadas)
+    // 2) Total de cidades distintas (todas as visíveis)
     const [locRows] = await pool.query(
-      `SELECT COUNT(DISTINCT m.cidade_id) AS qtd
-         FROM maquinas m
-        WHERE m.id IN (?)`,
-      [usedIds]
+      `
+      SELECT COUNT(DISTINCT m.cidade_id) AS qtd
+      FROM maquinas m
+      WHERE m.id IN (?)
+      `,
+      [visibleMachineIds]
     );
+
     const users_total = Number(locRows?.[0]?.qtd || 0);
 
-    // 4) status (agora só das usadas) + regra correta
+    // 3) Status de TODAS as visíveis (MySQL apenas)
     const [statusRows] = await pool.query(
-      `SELECT m.status
-         FROM maquinas m
-        WHERE m.id IN (?)`,
-      [usedIds]
+      `
+      SELECT m.status
+      FROM maquinas m
+      WHERE m.id IN (?)
+      `,
+      [visibleMachineIds]
     );
 
     let equipamentos_ativos = 0;
@@ -1798,6 +1785,7 @@ app.get("/api/location/kpis", async (req, res) => {
     res.status(500).json({ error: String(e) });
   }
 });
+
 
 app.get("/api/location/summary", async (req, res) => {
   try {
