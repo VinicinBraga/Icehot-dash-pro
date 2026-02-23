@@ -1743,17 +1743,56 @@ app.get("/api/location/kpis", async (req, res) => {
       });
     }
 
-    // 2) Total de cidades distintas (todas as visíveis)
-    const [locRows] = await pool.query(
+    // helper: extrai lat/lng do JSON em observacao
+    function extractLatLngFromObs(obs) {
+      try {
+        const obj = obs ? JSON.parse(String(obs)) : null;
+        if (!obj || typeof obj !== "object") return { lat: null, lng: null };
+
+        const latNum = obj.lat === "" || obj.lat == null ? null : Number(obj.lat);
+        const lngNum = obj.lng === "" || obj.lng == null ? null : Number(obj.lng);
+
+        if (Number.isFinite(latNum) && Number.isFinite(lngNum)) {
+          return { lat: latNum, lng: lngNum };
+        }
+      } catch {
+        // ignore
+      }
+      return { lat: null, lng: null };
+    }
+
+    // 2) "Localizações" = quantidade de equipamentos com coordenada resolvida
+    // (1 por equipamento; se não tiver coords do equipamento, tenta coords da cidade)
+    const [machinesForLoc] = await pool.query(
       `
-      SELECT COUNT(DISTINCT m.cidade_id) AS qtd
+      SELECT
+        m.id,
+        m.observacao,
+        c.nome AS cidade,
+        c.uf   AS uf
       FROM maquinas m
+      LEFT JOIN cidades c ON c.id = m.cidade_id
       WHERE m.id IN (?)
       `,
       [visibleMachineIds]
     );
 
-    const users_total = Number(locRows?.[0]?.qtd || 0);
+    let users_total = 0;
+
+    for (const m of machinesForLoc || []) {
+      // 1) tenta coords do equipamento (observacao.lat/lng)
+      const eq = extractLatLngFromObs(m.observacao);
+      if (eq.lat != null && eq.lng != null) {
+        users_total += 1;
+        continue;
+      }
+
+      // 2) fallback coords da cidade (city_coords)
+      const city = await getCityCoords(pool, m.cidade, m.uf);
+      if (city.lat != null && city.lng != null) {
+        users_total += 1;
+      }
+    }
 
     // 3) Status de TODAS as visíveis (MySQL apenas)
     const [statusRows] = await pool.query(
