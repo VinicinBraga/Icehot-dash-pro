@@ -6,7 +6,7 @@ const bigquery = new BigQuery();
 // Ajusta se o dataset/tabela mudarem no futuro
 const PROJECT_ID = process.env.BQ_PROJECT_ID || "kv-bi-428819";
 const DATASET_ID = "Dashboard_ICEHOT";
-const FACT_TABLE = "fact_informacoes_diaria";
+const FACT_TABLE = "fact_informacoes_diaria_v";
 
 async function getKpisFromBigQuery(machineIds, fromDate, toDate) {
   if (!Array.isArray(machineIds) || machineIds.length === 0) {
