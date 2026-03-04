@@ -21,6 +21,7 @@ const fetch = require("node-fetch");
 const CADASTRO_API_BASE = (
   process.env.CADASTRO_API_BASE || "http://localhost:7070"
 ).replace(/\/$/, "");
+console.log("DEBUG CADASTRO_API_BASE =", CADASTRO_API_BASE);
 
 const {
   getKpisFromBigQuery,
@@ -29,6 +30,8 @@ const {
   getTriggerSeriesFromBigQuery,
   getEquipmentAggregatesFromBigQuery,
   getAspersorPresenceFromBigQuery,
+  getHotTemperatureNowFromBigQuery,
+  getHotTemperatureByMachineFromBigQuery,
 } = require("./bigquery");
 
 const MASTER_EMAILS = [
@@ -486,6 +489,8 @@ app.get("/api/kpis", async (req, res) => {
       req.isMaster
     );
 
+    const tempNow = await getHotTemperatureNowFromBigQuery(machineIds);
+
     console.log("DEBUG /api/kpis machineIds", {
       userEmail,
       isMaster: req.isMaster,
@@ -503,6 +508,10 @@ app.get("/api/kpis", async (req, res) => {
         co2_poupado_kg: 0,
         modules: { fria: false, quente: false, pets: false, aspersor: false },
         _period: { from: fromStr, to: toStr, email: userEmail },
+        temperature: {
+          hot_current: tempNow?.hot_temp ?? null,
+          hot_updated_at: tempNow?.hot_updated_at ?? null,
+        },
       });
     }
 
@@ -2124,6 +2133,131 @@ app.get("/api/_debug/user-machines", async (req, res) => {
   }
 });
 
+app.get("/api/tables/hot-temperature", async (req, res) => {
+  try {
+    const userEmail = req.userEmail;
+    const machineIds = await resolveMachineIds(userEmail, req.query, req.isMaster);
+
+    if (!machineIds.length) {
+      return res.json({
+        columns: ["Equipamento", "Temperatura (°C)", "Leitura"],
+        rows: [],
+        total: 0,
+        hidden: true,
+      });
+    }
+
+    // ✅ manter só ATIVOS (status = 0)
+    const [activeRows] = await pool.query(
+      `SELECT id FROM maquinas WHERE id IN (?) AND status = 0`,
+      [machineIds]
+    );
+    const activeIds = activeRows.map((r) => Number(r.id)).filter(Boolean);
+
+    if (!activeIds.length) {
+      return res.json({
+        columns: ["Equipamento", "Temperatura (°C)", "Leitura"],
+        rows: [],
+        total: 0,
+        hidden: true,
+      });
+    }
+
+    // ✅ Checa se existe água quente em algum vínculo (se não, esconde a tabela)
+    const placeholders = activeIds.map(() => "?").join(",");
+    const usuarioQuery = asNum(req.query.usuario);
+    const usuarioFilter =
+      usuarioQuery || (!req.isMaster ? asNum(req.userId) : undefined);
+
+    const sqlModules = usuarioFilter
+      ? `
+        SELECT MAX(COALESCE(ue.agua_quente,0)) AS quente
+        FROM usuarios_equipamentos ue
+        WHERE ue.usuario_id = ?
+          AND ue.maquina_id IN (${placeholders})
+      `
+      : `
+        SELECT MAX(COALESCE(ue.agua_quente,0)) AS quente
+        FROM usuarios_equipamentos ue
+        WHERE ue.maquina_id IN (${placeholders})
+      `;
+
+    const paramsModules = usuarioFilter ? [usuarioFilter, ...activeIds] : activeIds;
+    const [modRows] = await pool.execute(sqlModules, paramsModules);
+    const quenteEnabled = Boolean(modRows?.[0]?.quente);
+
+    if (!quenteEnabled) {
+      return res.json({
+        columns: ["Equipamento", "Temperatura (°C)", "Leitura"],
+        rows: [],
+        total: 0,
+        hidden: true,
+      });
+    }
+
+    // 1) Busca temperaturas no BQ (somente das máquinas ativas)
+    const temps = await getHotTemperatureByMachineFromBigQuery(activeIds);
+
+    if (!temps.length) {
+      return res.json({
+        columns: ["Equipamento", "Temperatura (°C)", "Leitura"],
+        rows: [],
+        total: 0,
+        hidden: true,
+      });
+    }
+
+    // 2) Busca nomes dos equipamentos no MySQL (somente ativos)
+    const [machines] = await pool.query(
+      `
+      SELECT id, COALESCE(NULLIF(nome,''), CONCAT('EQP-', id)) AS equipamento
+      FROM maquinas
+      WHERE id IN (?)
+      `,
+      [activeIds]
+    );
+
+    const nameById = new Map();
+    for (const m of machines || []) nameById.set(Number(m.id), m.equipamento);
+
+    // 3) Monta tabela (filtra null e leituras absurdas)
+    const rows = (temps || [])
+      .map((t) => {
+        const id = Number(t.maquina_id);
+        const nome = nameById.get(id) || `EQP-${id}`;
+
+        const temp = t.hot_temp == null ? null : Number(t.hot_temp);
+
+        // ✅ faixa válida (ajustável)
+        if (temp == null || !Number.isFinite(temp) || temp < 30 || temp > 110) {
+          return null;
+        }
+
+        return [String(nome), temp, "Última temperatura registrada"];
+      })
+      .filter(Boolean)
+      .sort((a, b) => Number(b[1]) - Number(a[1]));
+
+    if (!rows.length) {
+      return res.json({
+        columns: ["Equipamento", "Temperatura (°C)", "Leitura"],
+        rows: [],
+        total: 0,
+        hidden: true,
+      });
+    }
+
+    return res.json({
+      columns: ["Equipamento", "Temperatura (°C)", "Leitura"],
+      rows,
+      total: rows.length,
+      hidden: false,
+    });
+  } catch (e) {
+    console.error("Erro em /api/tables/hot-temperature:", e);
+    res.status(500).json({ error: String(e) });
+  }
+});
 const PORT = Number(process.env.PORT) || 8080;
 app.listen(PORT, () => {
   console.log(`API rodando em http://localhost:${PORT}`);

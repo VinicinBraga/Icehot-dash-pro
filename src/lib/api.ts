@@ -13,7 +13,7 @@ import type {
 import { getToken, clearToken } from "./auth"; // ← usa o token real do login
 
 /** ========= Base da API ========= **/
-const API_BASE_URL =   (import.meta.env.DEV
+const API_BASE_URL = (import.meta.env.DEV
   ? "http://localhost:3001"
   : import.meta.env.VITE_API_URL?.toString() || "http://localhost:3001"
 ).replace(/\/+$/, "");
@@ -194,6 +194,21 @@ export async function fetchTriggerTable(
   appendFilters(url, filters);
   const res = await apiFetch(url.toString());
   return jsonOrThrow<TableData>(res, "Falha ao buscar tabela de acionamentos");
+}
+
+// Tabela temperatura água quente (atual)
+export async function fetchHotTemperatureTable(
+  from: Date,
+  to: Date,
+  filters?: Filters
+): Promise<TableData & { hidden?: boolean }> {
+  const url = new URL("/api/tables/hot-temperature", API_BASE_URL);
+  url.searchParams.set("from", toYMD(from));
+  url.searchParams.set("to", toYMD(to));
+  appendFilters(url, filters);
+
+  const res = await apiFetch(url.toString());
+  return jsonOrThrow(res, "Falha ao buscar tabela de temperatura");
 }
 
 // Filtros (usuarios, modelos, equipamentos, séries, status)

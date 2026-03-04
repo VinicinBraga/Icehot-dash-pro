@@ -324,6 +324,65 @@ async function getAspersorPresenceFromBigQuery(machineIds, toDate) {
   return sum > 0;
 }
 
+// server/bigquery.js
+
+async function getHotTemperatureNowFromBigQuery(machineIds) {
+  // Temperatura "atual" só faz sentido quando há 1 equipamento selecionado
+  if (!Array.isArray(machineIds) || machineIds.length !== 1) {
+    return {
+      hot_temp: null,
+      hot_updated_at: null,
+    };
+  }
+
+  const machineId = Number(machineIds[0]);
+
+  const query = `
+    SELECT
+      temperatura_agua_quente AS hot_temp,
+      temperatura_updated_at  AS hot_updated_at
+    FROM \`${PROJECT_ID}.${DATASET_ID}.v_temperatura_quente_atual\`
+    WHERE maquina_id = @machine_id
+    LIMIT 1
+  `;
+
+  const options = {
+    query,
+    params: { machine_id: machineId },
+  };
+
+  const [rows] = await bigquery.query(options);
+
+  return rows?.[0] || { hot_temp: null, hot_updated_at: null };
+}
+
+async function getHotTemperatureByMachineFromBigQuery(machineIds) {
+  if (!Array.isArray(machineIds) || machineIds.length === 0) {
+    return [];
+  }
+
+  const query = `
+    DECLARE machine_ids ARRAY<INT64> DEFAULT @machine_ids;
+
+    SELECT
+      maquina_id,
+      temperatura_agua_quente AS hot_temp,
+      temperatura_updated_at  AS hot_updated_at
+    FROM \`${PROJECT_ID}.${DATASET_ID}.v_temperatura_quente_atual\`
+    WHERE maquina_id IN UNNEST(machine_ids)
+  `;
+
+  const options = {
+    query,
+    params: {
+      machine_ids: machineIds.map(Number),
+    },
+  };
+
+  const [rows] = await bigquery.query(options);
+  return rows || [];
+}
+
 module.exports = {
   getKpisFromBigQuery,
   getLitersByMachineFromBigQuery,
@@ -331,4 +390,6 @@ module.exports = {
   getTriggerSeriesFromBigQuery,
   getEquipmentAggregatesFromBigQuery,
   getAspersorPresenceFromBigQuery,
+  getHotTemperatureNowFromBigQuery,
+  getHotTemperatureByMachineFromBigQuery,
 };

@@ -52,7 +52,7 @@ import "leaflet/dist/leaflet.css";
 import { clearToken } from "@/lib/auth";
 import { LogOut } from "lucide-react";
 import { Button } from "@/components/ui/button";
-
+import { useHotTemperatureTable } from "@/hooks/useHotTemperatureTable";
 // Lazy load map to avoid SSR issues
 const MapView = lazy(() => import("@/components/MapView"));
 
@@ -103,7 +103,7 @@ const Index = () => {
   const modelPie = useModelPie(dateRange, filters);
   const waterTable = useWaterTable(dateRange, filters);
   const triggerTable = useTriggerTable(dateRange, filters);
-
+  const hotTempTable = useHotTemperatureTable(dateRange.from, dateRange.to, filters);
   // ==== dados equipamentos ====
   const installations = useInstallationsSeries(dateRange, filters);
   const cumulative = useCumulativeSeries(dateRange, filters);
@@ -630,8 +630,19 @@ const Index = () => {
                 total={triggerTable.data?.total ?? 0}
               />
             </div>
+            {/* Tabela de Temperatura (abaixo das duas) */}
+            {hotTempTable?.data?.hidden !== true && (hotTempTable?.data?.rows ?? []).length > 0 && (
+              <div className="mt-6">
+                <DataTable
+                  title="Temperatura (Água Quente)"
+                  columns={hotTempTable.data.columns ?? ["Equipamento", "Temperatura (°C)", "Atualizado em"]}
+                  rows={hotTempTable.data.rows ?? []}
+                  total={hotTempTable.data.total ?? 0}
+                />
+              </div>
+            )}
           </TabsContent>
-
+          
           {/* Equipment Tab */}
           <TabsContent value="equipment" className="space-y-6 mt-6">
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
