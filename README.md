@@ -181,7 +181,7 @@ bash
 
 SERVICE=icehot-api
 REGION=southamerica-east1
-IMAGE=$REGION-docker.pkg.dev/kv-bi-428819/icehot-repo/$SERVICE
+IMAGE=$REGION-docker.pkg.dev/kv-bi-485613/icehot-repo/$SERVICE
 Build:
 
 bash
