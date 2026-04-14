@@ -11,9 +11,10 @@ import {
 import { Button } from "@/components/ui/button";
 import { ChevronLeft, ChevronRight, ArrowUpDown } from "lucide-react";
 import { formatNumber } from "@/lib/format";
+import type { ReactNode } from "react";
 
 interface DataTableProps {
-  title: string;
+  title: ReactNode;
   columns: string[];
   rows: Array<Array<string | number | null>>;
   total?: number;

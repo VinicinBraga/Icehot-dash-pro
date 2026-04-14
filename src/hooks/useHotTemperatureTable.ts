@@ -6,16 +6,29 @@ type TableData = {
   columns: any[];
   rows: any[];
   total: number;
-};// ajuste se seus types estiverem em outro lugar
+};
 
-type HotTempTableData = TableData & { hidden?: boolean };
+type TempTableBlock = TableData & { hidden?: boolean };
+
+type HotTempTableData = {
+  hot: TempTableBlock;
+  cold: TempTableBlock;
+};
 
 export function useHotTemperatureTable(from: Date, to: Date, filters?: Filters) {
   const [data, setData] = useState<HotTempTableData>({
-    columns: [],
-    rows: [],
-    total: 0,
-    hidden: true,
+    hot: {
+      columns: [],
+      rows: [],
+      total: 0,
+      hidden: true,
+    },
+    cold: {
+      columns: [],
+      rows: [],
+      total: 0,
+      hidden: true,
+    },
   });
 
   const [loading, setLoading] = useState(false);
@@ -34,15 +47,26 @@ export function useHotTemperatureTable(from: Date, to: Date, filters?: Filters) 
         if (!alive) return;
 
         setData({
-          columns: res?.columns || [],
-          rows: res?.rows || [],
-          total: Number(res?.total || 0),
-          hidden: Boolean(res?.hidden),
+          hot: {
+            columns: res?.hot?.columns || [],
+            rows: res?.hot?.rows || [],
+            total: Number(res?.hot?.total || 0),
+            hidden: Boolean(res?.hot?.hidden),
+          },
+          cold: {
+            columns: res?.cold?.columns || [],
+            rows: res?.cold?.rows || [],
+            total: Number(res?.cold?.total || 0),
+            hidden: Boolean(res?.cold?.hidden),
+          },
         });
       } catch (e: any) {
         if (!alive) return;
         setError(e?.message || "Falha ao buscar tabela de temperatura");
-        setData({ columns: [], rows: [], total: 0, hidden: true });
+        setData({
+          hot: { columns: [], rows: [], total: 0, hidden: true },
+          cold: { columns: [], rows: [], total: 0, hidden: true },
+        });
       } finally {
         if (alive) setLoading(false);
       }

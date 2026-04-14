@@ -387,6 +387,86 @@ async function getHotTemperatureByMachineFromBigQuery(machineIds) {
   return rows || [];
 }
 
+async function getColdTemperatureNowFromBigQuery(machineIds) {
+  if (!Array.isArray(machineIds) || machineIds.length !== 1) {
+    return {
+      cold_temp: null,
+      cold_updated_at: null,
+    };
+  }
+
+  const machineId = Number(machineIds[0]);
+
+  const query = `
+    WITH ult AS (
+      SELECT
+        maquina_id,
+        temperatura_agua_fria AS cold_temp,
+        updated_at AS cold_updated_at,
+        ROW_NUMBER() OVER (
+          PARTITION BY maquina_id
+          ORDER BY updated_at DESC, id DESC
+        ) AS rn
+      FROM \`${PROJECT_ID}.${DATASET_ID}.informacoes_raw_dedup\`
+      WHERE maquina_id = @machine_id
+    )
+    SELECT
+      maquina_id,
+      cold_temp,
+      cold_updated_at
+    FROM ult
+    WHERE rn = 1
+    LIMIT 1
+  `;
+
+  const options = {
+    query,
+    params: { machine_id: machineId },
+  };
+
+  const [rows] = await bigquery.query(options);
+  return rows?.[0] || { cold_temp: null, cold_updated_at: null };
+}
+
+async function getColdTemperatureByMachineFromBigQuery(machineIds) {
+  if (!Array.isArray(machineIds) || machineIds.length === 0) {
+    return [];
+  }
+
+  const query = `
+    DECLARE machine_ids ARRAY<INT64> DEFAULT @machine_ids;
+
+    WITH ult AS (
+      SELECT
+        maquina_id,
+        temperatura_agua_fria AS cold_temp,
+        updated_at AS cold_updated_at,
+        ROW_NUMBER() OVER (
+          PARTITION BY maquina_id
+          ORDER BY updated_at DESC, id DESC
+        ) AS rn
+      FROM \`${PROJECT_ID}.${DATASET_ID}.informacoes_raw_dedup\`
+      WHERE maquina_id IN UNNEST(machine_ids)
+    )
+    SELECT
+      maquina_id,
+      cold_temp,
+      cold_updated_at
+    FROM ult
+    WHERE rn = 1
+  `;
+
+  const options = {
+    query,
+    params: {
+      machine_ids: machineIds.map(Number),
+    },
+  };
+
+  const [rows] = await bigquery.query(options);
+  return rows || [];
+}
+
 module.exports = {
   getKpisFromBigQuery,
   getLitersByMachineFromBigQuery,
@@ -396,4 +476,6 @@ module.exports = {
   getAspersorPresenceFromBigQuery,
   getHotTemperatureNowFromBigQuery,
   getHotTemperatureByMachineFromBigQuery,
+  getColdTemperatureNowFromBigQuery,
+  getColdTemperatureByMachineFromBigQuery,
 };

@@ -32,6 +32,8 @@ const {
   getAspersorPresenceFromBigQuery,
   getHotTemperatureNowFromBigQuery,
   getHotTemperatureByMachineFromBigQuery,
+  getColdTemperatureNowFromBigQuery,
+  getColdTemperatureByMachineFromBigQuery,
 } = require("./bigquery");
 
 const MASTER_EMAILS = [
@@ -2186,19 +2188,12 @@ app.get("/api/tables/hot-temperature", async (req, res) => {
     const [modRows] = await pool.execute(sqlModules, paramsModules);
     const quenteEnabled = Boolean(modRows?.[0]?.quente);
 
-    if (!quenteEnabled) {
-      return res.json({
-        columns: ["Equipamento", "Temperatura (°C)", "Leitura"],
-        rows: [],
-        total: 0,
-        hidden: true,
-      });
-    }
 
     // 1) Busca temperaturas no BQ (somente das máquinas ativas)
-    const temps = await getHotTemperatureByMachineFromBigQuery(activeIds);
+    const hotTemps = await getHotTemperatureByMachineFromBigQuery(activeIds);
+    const coldTemps = await getColdTemperatureByMachineFromBigQuery(activeIds);
 
-    if (!temps.length) {
+    if (!hotTemps.length && !coldTemps.length) {
       return res.json({
         columns: ["Equipamento", "Temperatura (°C)", "Leitura"],
         rows: [],
@@ -2221,38 +2216,67 @@ app.get("/api/tables/hot-temperature", async (req, res) => {
     for (const m of machines || []) nameById.set(Number(m.id), m.equipamento);
 
     // 3) Monta tabela (filtra null e leituras absurdas)
-    const rows = (temps || [])
-      .map((t) => {
-        const id = Number(t.maquina_id);
-        const nome = nameById.get(id) || `EQP-${id}`;
+    const hotRows = (hotTemps || [])
+  .map((t) => {
+    const id = Number(t.maquina_id);
+    const nome = nameById.get(id) || `EQP-${id}`;
+    const temp = t.hot_temp == null ? null : Number(t.hot_temp);
 
-        const temp = t.hot_temp == null ? null : Number(t.hot_temp);
+    if (temp == null || !Number.isFinite(temp) || temp < 30 || temp > 110) {
+      return null;
+    }
 
-        // ✅ faixa válida (ajustável)
-        if (temp == null || !Number.isFinite(temp) || temp < 30 || temp > 110) {
-          return null;
-        }
+    return [String(nome), temp, "Última temperatura registrada"];
+  })
+  .filter(Boolean)
+  .sort((a, b) => Number(b[1]) - Number(a[1]));
 
-        return [String(nome), temp, "Última temperatura registrada"];
-      })
-      .filter(Boolean)
-      .sort((a, b) => Number(b[1]) - Number(a[1]));
+const coldRows = (coldTemps || [])
+  .map((t) => {
+    const id = Number(t.maquina_id);
+    const nome = nameById.get(id) || `EQP-${id}`;
+    const temp = t.cold_temp == null ? null : Number(t.cold_temp);
 
-    if (!rows.length) {
-      return res.json({
+    if (temp == null || !Number.isFinite(temp) || temp < 0 || temp > 25) {
+      return null;
+    }
+
+    return [String(nome), temp, "Última temperatura registrada"];
+  })
+  .filter(Boolean)
+  .sort((a, b) => Number(b[1]) - Number(a[1]));
+
+  if (!hotRows.length && !coldRows.length) {
+    return res.json({
+      hot: {
         columns: ["Equipamento", "Temperatura (°C)", "Leitura"],
         rows: [],
         total: 0,
         hidden: true,
-      });
-    }
-
-    return res.json({
-      columns: ["Equipamento", "Temperatura (°C)", "Leitura"],
-      rows,
-      total: rows.length,
-      hidden: false,
+      },
+      cold: {
+        columns: ["Equipamento", "Temperatura (°C)", "Leitura"],
+        rows: [],
+        total: 0,
+        hidden: true,
+      },
     });
+  }
+  
+  return res.json({
+    hot: {
+      columns: ["Equipamento", "Temperatura (°C)", "Leitura"],
+      rows: hotRows,
+      total: hotRows.length,
+      hidden: hotRows.length === 0,
+    },
+    cold: {
+      columns: ["Equipamento", "Temperatura (°C)", "Leitura"],
+      rows: coldRows,
+      total: coldRows.length,
+      hidden: coldRows.length === 0,
+    },
+  });
   } catch (e) {
     console.error("Erro em /api/tables/hot-temperature:", e);
     res.status(500).json({ error: String(e) });

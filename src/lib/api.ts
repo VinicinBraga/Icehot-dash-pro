@@ -201,7 +201,10 @@ export async function fetchHotTemperatureTable(
   from: Date,
   to: Date,
   filters?: Filters
-): Promise<TableData & { hidden?: boolean }> {
+): Promise<{
+  hot: TableData & { hidden?: boolean };
+  cold: TableData & { hidden?: boolean };
+}> {
   const url = new URL("/api/tables/hot-temperature", API_BASE_URL);
   url.searchParams.set("from", toYMD(from));
   url.searchParams.set("to", toYMD(to));

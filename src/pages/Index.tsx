@@ -631,16 +631,86 @@ const Index = () => {
               />
             </div>
             {/* Tabela de Temperatura (abaixo das duas) */}
-            {hotTempTable?.data?.hidden !== true && (hotTempTable?.data?.rows ?? []).length > 0 && (
-              <div className="mt-6">
-                <DataTable
-                  title="Temperatura (Água Quente)"
-                  columns={hotTempTable.data.columns ?? ["Equipamento", "Temperatura (°C)", "Atualizado em"]}
-                  rows={hotTempTable.data.rows ?? []}
-                  total={hotTempTable.data.total ?? 0}
-                />
-              </div>
-            )}
+            {(() => {
+              const hasHot =
+                hotTempTable?.data?.hot &&
+                hotTempTable.data.hot.hidden !== true &&
+                (hotTempTable.data.hot.rows ?? []).length > 0;
+
+              const hasCold =
+                hotTempTable?.data?.cold &&
+                (hotTempTable.data.cold.rows ?? []).length > 0;
+
+              if (!hasHot && !hasCold) return null;
+
+              // 🔥 Se tiver quente → mostra as duas lado a lado
+              if (hasHot) {
+                return (
+                  <div className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {/* 🔥 Água Quente */}
+                    <DataTable
+                      title={
+                        <div className="flex items-center gap-2 text-orange-500">
+                          <Flame className="w-4 h-4" />
+                          <span>Temperatura (Água Quente)</span>
+                        </div>
+                      }
+                      columns={
+                        hotTempTable.data.hot.columns ?? [
+                          "Equipamento",
+                          "Temperatura (°C)",
+                          "Leitura",
+                        ]
+                      }
+                      rows={hotTempTable.data.hot.rows ?? []}
+                      total={hotTempTable.data.hot.total ?? 0}
+                    />
+
+                    {/* ❄️ Água Gelada */}
+                    <DataTable
+                      title={
+                        <div className="flex items-center gap-2 text-blue-500">
+                          <Snowflake className="w-4 h-4" />
+                          <span>Temperatura (Água Gelada)</span>
+                        </div>
+                      }
+                      columns={
+                        hotTempTable.data.cold.columns ?? [
+                          "Equipamento",
+                          "Temperatura (°C)",
+                          "Leitura",
+                        ]
+                      }
+                      rows={hotTempTable.data.cold.rows ?? []}
+                      total={hotTempTable.data.cold.total ?? 0}
+                    />
+                  </div>
+                );
+              }
+
+              // ❄️ Se NÃO tiver quente → gelada ocupa tudo
+              return (
+                <div className="mt-6">
+                  <DataTable
+                    title={
+                      <div className="flex items-center gap-2 text-blue-500">
+                        <Snowflake className="w-4 h-4" />
+                        <span>Temperatura (Água Gelada)</span>
+                      </div>
+                    }
+                    columns={
+                      hotTempTable.data.cold.columns ?? [
+                        "Equipamento",
+                        "Temperatura (°C)",
+                        "Leitura",
+                      ]
+                    }
+                    rows={hotTempTable.data.cold.rows ?? []}
+                    total={hotTempTable.data.cold.total ?? 0}
+                  />
+                </div>
+              );
+            })()}
           </TabsContent>
           
           {/* Equipment Tab */}
