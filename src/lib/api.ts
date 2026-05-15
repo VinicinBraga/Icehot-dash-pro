@@ -214,6 +214,56 @@ export async function fetchHotTemperatureTable(
   return jsonOrThrow(res, "Falha ao buscar tabela de temperatura");
 }
 
+export type TemperatureHistoryEquipment = {
+  maquina_id: number;
+  maquina_nome: string;
+  labels: string[];
+  series: Array<{
+    key: "quente" | "fria";
+    values: Array<number | null>;
+  }>;
+  rows: Array<{
+    maquina_id: number;
+    maquina_nome: string;
+    leitura_em: string;
+    temperatura_quente: number | null;
+    temperatura_fria: number | null;
+    leituras: number;
+  }>;
+};
+
+export type TemperatureHistoryResponse = {
+  equipments: TemperatureHistoryEquipment[];
+  total: number;
+  total_equipments: number;
+  _period?: {
+    from: string;
+    to: string;
+    email: string;
+  };
+};
+
+export async function fetchTemperatureHistory(
+  from: Date,
+  to: Date,
+  filters?: Filters
+): Promise<TemperatureHistoryResponse> {
+  const url = new URL("/api/series/temperature-history", API_BASE_URL);
+
+  url.searchParams.set("from", toYMD(from));
+  url.searchParams.set("to", toYMD(to));
+  url.searchParams.set("_t", String(Date.now()));
+
+  appendFilters(url, filters);
+
+  const res = await apiFetch(url.toString());
+
+  return jsonOrThrow<TemperatureHistoryResponse>(
+    res,
+    "Falha ao buscar histórico de temperatura"
+  );
+}
+
 // Filtros (usuarios, modelos, equipamentos, séries, status)
 export async function fetchFilters(): Promise<FilterOptions> {
   const url = new URL("/api/filters", API_BASE_URL);

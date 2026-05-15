@@ -467,6 +467,57 @@ async function getColdTemperatureByMachineFromBigQuery(machineIds) {
   return rows || [];
 }
 
+async function getTemperatureHistoryFromBigQuery(machineIds, fromDate, toDate) {
+  if (!Array.isArray(machineIds) || machineIds.length === 0) {
+    return [];
+  }
+
+  const query = `
+    DECLARE machine_ids ARRAY<INT64> DEFAULT @machine_ids;
+  
+    WITH base AS (
+      SELECT
+        i.maquina_id,
+        m.maquina_nome,
+        TIMESTAMP_TRUNC(TIMESTAMP(i.created_at), HOUR, 'America/Sao_Paulo') AS leitura_hora,
+        SAFE_CAST(i.temperatura_agua_quente AS FLOAT64) AS temperatura_quente,
+        SAFE_CAST(i.temperatura_agua_fria AS FLOAT64) AS temperatura_fria
+      FROM \`${PROJECT_ID}.${DATASET_ID}.informacoes_raw\` i
+      LEFT JOIN \`${PROJECT_ID}.${DATASET_ID}.dim_maquinas\` m
+        ON m.maquina_id = i.maquina_id
+      WHERE i.maquina_id IN UNNEST(machine_ids)
+        AND DATE(TIMESTAMP(i.created_at), 'America/Sao_Paulo') BETWEEN @fromDate AND @toDate
+        AND (
+          SAFE_CAST(i.temperatura_agua_quente AS FLOAT64) IS NOT NULL
+          OR SAFE_CAST(i.temperatura_agua_fria AS FLOAT64) IS NOT NULL
+        )
+    )
+        
+    SELECT
+      maquina_id,
+      ANY_VALUE(maquina_nome) AS maquina_nome,
+      FORMAT_TIMESTAMP('%Y-%m-%d %H:00:00', leitura_hora, 'America/Sao_Paulo') AS leitura_em,
+      ROUND(AVG(temperatura_quente), 2) AS temperatura_quente,
+      ROUND(AVG(temperatura_fria), 2) AS temperatura_fria,
+      COUNT(*) AS leituras
+    FROM base
+    GROUP BY maquina_id, leitura_hora
+    ORDER BY maquina_id, leitura_hora
+  `;
+
+  const options = {
+    query,
+    params: {
+      machine_ids: machineIds.map(Number),
+      fromDate,
+      toDate,
+    },
+  };
+
+  const [rows] = await bigquery.query(options);
+  return rows || [];
+}
+
 module.exports = {
   getKpisFromBigQuery,
   getLitersByMachineFromBigQuery,
@@ -478,4 +529,5 @@ module.exports = {
   getHotTemperatureByMachineFromBigQuery,
   getColdTemperatureNowFromBigQuery,
   getColdTemperatureByMachineFromBigQuery,
+  getTemperatureHistoryFromBigQuery,
 };

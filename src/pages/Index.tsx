@@ -25,7 +25,8 @@ import { useInstallationsSeries } from "@/hooks/useInstallationsSeries";
 import { useCumulativeSeries } from "@/hooks/useCumulativeSeries";
 import { useLocationKpis } from "@/hooks/useLocationKpis";
 import { useLocationSummary } from "@/hooks/useLocationSummary";
-
+import { TemperatureHistoryModal } from "@/components/TemperatureHistoryModal";
+import { useTemperatureHistory } from "@/hooks/useTemperatureHistory";
 import {
   Activity,
   BarChart3,
@@ -76,6 +77,15 @@ const Index = () => {
   } = useFilters();
   const [filters, setFilters] = useState<Filters>({});
   const [activeTab, setActiveTab] = useState("overview");
+  const [temperatureHistoryOpen, setTemperatureHistoryOpen] = useState(false);
+  const [temperatureHistoryDays, setTemperatureHistoryDays] = useState(7);
+
+  const temperatureHistoryRange = useMemo(() => {
+    const to = new Date();
+    const from = subDays(to, temperatureHistoryDays);
+
+    return { from, to };
+  }, [temperatureHistoryDays]);
   type EquipmentFilterItem = {
     value: number | string;
     label: string;
@@ -101,6 +111,11 @@ const Index = () => {
   const water = useWaterSeries(dateRange, filters);
   const trig = useTriggerSeries(dateRange, filters);
   const modelPie = useModelPie(dateRange, filters);
+  const temperatureHistory = useTemperatureHistory(
+    temperatureHistoryRange.from,
+    temperatureHistoryRange.to,
+    filters
+  );
   const waterTable = useWaterTable(dateRange, filters);
   const triggerTable = useTriggerTable(dateRange, filters);
   const hotTempTable = useHotTemperatureTable(dateRange.from, dateRange.to, filters);
@@ -573,7 +588,15 @@ const Index = () => {
                 />
               )}
             </div>
-
+            <div className="flex justify-end">
+              <Button
+                type="button"
+                className="rounded-full"
+                onClick={() => setTemperatureHistoryOpen(true)}
+              >
+                Ver histórico de temperatura
+              </Button>
+            </div>    
             {/* Extras */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <KpiCard
@@ -797,6 +820,15 @@ const Index = () => {
             />
           </TabsContent>
         </Tabs>
+        <TemperatureHistoryModal
+          open={temperatureHistoryOpen}
+          onClose={() => setTemperatureHistoryOpen(false)}
+          data={temperatureHistory.data}
+          loading={temperatureHistory.isLoading}
+          error={temperatureHistory.error ? String(temperatureHistory.error) : null}
+          selectedDays={temperatureHistoryDays}
+          onChangeDays={setTemperatureHistoryDays}
+        />
       </main>
     </div>
   );

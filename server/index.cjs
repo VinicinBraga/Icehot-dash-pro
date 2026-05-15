@@ -34,6 +34,7 @@ const {
   getHotTemperatureByMachineFromBigQuery,
   getColdTemperatureNowFromBigQuery,
   getColdTemperatureByMachineFromBigQuery,
+  getTemperatureHistoryFromBigQuery,
 } = require("./bigquery");
 
 const MASTER_EMAILS = [
@@ -47,14 +48,15 @@ const ENV_ORIGINS = (process.env.ALLOWED_ORIGINS || "")
   .map((s) => s.trim())
   .filter(Boolean);
 
-const ALLOWED_ORIGINS = [
-  "https://icehot-dash-pro.vercel.app",
-  "https://icehot-dash-api-750315205117.southamerica-east1.run.app",
-  "http://localhost:5173",
-  "http://127.0.0.1:5173",
-  "http://localhost:8080",
-  "http://127.0.0.1:8080",
-];
+  const ALLOWED_ORIGINS = [
+    "https://icehot-dash-pro.vercel.app",
+    "https://icehot-dash-api-750315205117.southamerica-east1.run.app",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:8080",
+    "http://127.0.0.1:8080",
+    ...ENV_ORIGINS,
+  ];
 
 app.use((req, res, next) => {
   const origin = req.headers.origin;
@@ -471,7 +473,7 @@ app.get("/api/kpis", async (req, res) => {
     // Usa o email vindo do JWT (middleware de auth já preenche req.userEmail)
     const userEmail = req.userEmail || req.header("x-user-email") || null;
     const { from, to } = req.query; // esperado YYYY-MM-DD
-
+  
     // datas padrão (últimos 30 dias)
     const defaultTo = new Date();
     const defaultFrom = new Date();
@@ -737,19 +739,14 @@ app.get("/api/series/water", async (req, res) => {
       });
     }
 
-    // 2) Busca no BigQuery (já agrupa por mês e preenche com zeros)
     const rows = await getWaterSeriesFromBigQuery(machineIds, fromStr, toStr);
 
-    // 3) Monta labels (meses)
     const labels = rows.map((r) => {
       const [y, m] = r.ym.split("-");
       const dt = new Date(Number(y), Number(m) - 1, 1);
-      return dt
-        .toLocaleDateString("pt-BR", { month: "short" })
-        .replace(".", "");
+      return dt.toLocaleDateString("pt-BR", { month: "short" }).replace(".", "");
     });
-
-    // 4) Monta séries
+    
     const series = [
       {
         key: "total",
@@ -760,34 +757,17 @@ app.get("/api/series/water", async (req, res) => {
             Number(r.sum_v_pet || 0)
         ),
       },
-      {
-        key: "fria",
-        values: rows.map((r) => Number(r.sum_v_fria || 0)),
-      },
-      {
-        key: "quente",
-        values: rows.map((r) => Number(r.sum_v_quente || 0)),
-      },
-      {
-        key: "pets",
-        values: rows.map((r) => Number(r.sum_v_pet || 0)),
-      },
+      { key: "fria", values: rows.map((r) => Number(r.sum_v_fria || 0)) },
+      { key: "quente", values: rows.map((r) => Number(r.sum_v_quente || 0)) },
+      { key: "pets", values: rows.map((r) => Number(r.sum_v_pet || 0)) },
     ];
-
-    // Debug
-    console.log("Water Series BQ:", {
-      email: userEmail,
-      machineIds,
-      fromStr,
-      toStr,
-      rows,
-    });
-
-    res.json({
+    
+    return res.json({
       labels,
       series,
       _period: { from: fromStr, to: toStr, email: userEmail },
     });
+
   } catch (e) {
     console.error("Erro em /api/series/water:", e);
     res.status(500).json({ error: String(e) });
@@ -2282,6 +2262,89 @@ const coldRows = (coldTemps || [])
     res.status(500).json({ error: String(e) });
   }
 });
+
+app.get("/api/series/temperature-history", async (req, res) => {
+  try {
+    const userEmail = req.userEmail || req.header("x-user-email");
+    const { from, to } = req.query;
+
+    const defaultTo = new Date();
+    const defaultFrom = new Date();
+    defaultFrom.setDate(defaultFrom.getDate() - 7);
+
+    const toStr =
+      typeof to === "string" && to ? to : defaultTo.toISOString().slice(0, 10);
+
+    const fromStr =
+      typeof from === "string" && from
+        ? from
+        : defaultFrom.toISOString().slice(0, 10);
+
+    const machineIds = await resolveMachineIds(
+      userEmail,
+      req.query,
+      req.isMaster
+    );
+
+    if (!machineIds.length) {
+      return res.json({
+        equipments: [],
+        total: 0,
+        total_equipments: 0,
+        _period: { from: fromStr, to: toStr, email: userEmail },
+      });
+    }
+    
+    const rows = await getTemperatureHistoryFromBigQuery(
+      machineIds,
+      fromStr,
+      toStr
+    );
+    
+    const grouped = {};
+    
+    for (const row of rows) {
+      const machineId = row.maquina_id;
+    
+      if (!grouped[machineId]) {
+        grouped[machineId] = {
+          maquina_id: machineId,
+          maquina_nome: row.maquina_nome || `Equipamento ${machineId}`,
+          labels: [],
+          series: [
+            { key: "quente", values: [] },
+            { key: "fria", values: [] },
+          ],
+          rows: [],
+        };
+      }
+    
+      grouped[machineId].labels.push(row.leitura_em);
+    
+      grouped[machineId].series[0].values.push(
+        row.temperatura_quente == null ? null : Number(row.temperatura_quente)
+      );
+    
+      grouped[machineId].series[1].values.push(
+        row.temperatura_fria == null ? null : Number(row.temperatura_fria)
+      );
+    
+      grouped[machineId].rows.push(row);
+    }
+    
+    return res.json({
+      equipments: Object.values(grouped),
+      total: rows.length,
+      total_equipments: Object.keys(grouped).length,
+      _period: { from: fromStr, to: toStr, email: userEmail },
+    });
+    
+  } catch (e) {
+    console.error("Erro em /api/series/temperature-history:", e);
+    res.status(500).json({ error: String(e) });
+  }
+});
+
 const PORT = Number(process.env.PORT) || 8080;
 app.listen(PORT, () => {
   console.log(`API rodando em http://localhost:${PORT}`);
