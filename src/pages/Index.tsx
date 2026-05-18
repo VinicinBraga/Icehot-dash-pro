@@ -488,6 +488,15 @@ const Index = () => {
               </div>
             )}
           </div>
+          <div className="flex justify-end">
+              <Button
+                type="button"
+                className="rounded-full"
+                onClick={() => setTemperatureHistoryOpen(true)}
+              >
+                Ver histórico de temperatura
+              </Button>
+            </div>  
 
           {/* Overview Tab */}
           <TabsContent value="overview" className="space-y-6 mt-6">
@@ -588,15 +597,7 @@ const Index = () => {
                 />
               )}
             </div>
-            <div className="flex justify-end">
-              <Button
-                type="button"
-                className="rounded-full"
-                onClick={() => setTemperatureHistoryOpen(true)}
-              >
-                Ver histórico de temperatura
-              </Button>
-            </div>    
+
             {/* Extras */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <KpiCard
@@ -621,7 +622,7 @@ const Index = () => {
                 icon={<Cloud />}
               />
             </div>
-
+  
             {/* Charts */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               <WaterChart
