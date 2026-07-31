@@ -114,7 +114,8 @@ const Index = () => {
   const temperatureHistory = useTemperatureHistory(
     temperatureHistoryRange.from,
     temperatureHistoryRange.to,
-    filters
+    filters,
+    temperatureHistoryOpen
   );
   const waterTable = useWaterTable(dateRange, filters);
   const triggerTable = useTriggerTable(dateRange, filters);

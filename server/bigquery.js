@@ -345,7 +345,7 @@ async function getHotTemperatureNowFromBigQuery(machineIds) {
     SELECT
       temperatura_agua_quente AS hot_temp,
       temperatura_updated_at  AS hot_updated_at
-    FROM \`${PROJECT_ID}.${DATASET_ID}.v_temperatura_quente_atual\`
+    FROM \`${PROJECT_ID}.${DATASET_ID}.temperatura_quente_atual\`
     WHERE maquina_id = @machine_id
     LIMIT 1
   `;
@@ -372,7 +372,7 @@ async function getHotTemperatureByMachineFromBigQuery(machineIds) {
       maquina_id,
       temperatura_agua_quente AS hot_temp,
       temperatura_updated_at  AS hot_updated_at
-    FROM \`${PROJECT_ID}.${DATASET_ID}.v_temperatura_quente_atual\`
+    FROM \`${PROJECT_ID}.${DATASET_ID}.temperatura_quente_atual\`
     WHERE maquina_id IN UNNEST(machine_ids)
   `;
 
@@ -474,35 +474,27 @@ async function getTemperatureHistoryFromBigQuery(machineIds, fromDate, toDate) {
 
   const query = `
     DECLARE machine_ids ARRAY<INT64> DEFAULT @machine_ids;
-  
-    WITH base AS (
-      SELECT
-        i.maquina_id,
-        m.maquina_nome,
-        TIMESTAMP_TRUNC(TIMESTAMP(i.created_at), HOUR, 'America/Sao_Paulo') AS leitura_hora,
-        SAFE_CAST(i.temperatura_agua_quente AS FLOAT64) AS temperatura_quente,
-        SAFE_CAST(i.temperatura_agua_fria AS FLOAT64) AS temperatura_fria
-      FROM \`${PROJECT_ID}.${DATASET_ID}.informacoes_raw\` i
-      LEFT JOIN \`${PROJECT_ID}.${DATASET_ID}.dim_maquinas\` m
-        ON m.maquina_id = i.maquina_id
-      WHERE i.maquina_id IN UNNEST(machine_ids)
-        AND DATE(TIMESTAMP(i.created_at), 'America/Sao_Paulo') BETWEEN @fromDate AND @toDate
-        AND (
-          SAFE_CAST(i.temperatura_agua_quente AS FLOAT64) IS NOT NULL
-          OR SAFE_CAST(i.temperatura_agua_fria AS FLOAT64) IS NOT NULL
-        )
-    )
-        
+
     SELECT
-      maquina_id,
-      ANY_VALUE(maquina_nome) AS maquina_nome,
-      FORMAT_TIMESTAMP('%Y-%m-%d %H:00:00', leitura_hora, 'America/Sao_Paulo') AS leitura_em,
-      ROUND(AVG(temperatura_quente), 2) AS temperatura_quente,
-      ROUND(AVG(temperatura_fria), 2) AS temperatura_fria,
-      COUNT(*) AS leituras
-    FROM base
-    GROUP BY maquina_id, leitura_hora
-    ORDER BY maquina_id, leitura_hora
+      t.maquina_id,
+      m.maquina_nome,
+      FORMAT_TIMESTAMP(
+        '%Y-%m-%d %H:00:00',
+        t.leitura_hora,
+        'America/Sao_Paulo'
+      ) AS leitura_em,
+      t.temperatura_quente,
+      t.temperatura_fria,
+      t.leituras
+    FROM \`${PROJECT_ID}.${DATASET_ID}.fact_temperatura_horaria\` t
+    LEFT JOIN \`${PROJECT_ID}.${DATASET_ID}.dim_maquinas\` m
+      ON m.maquina_id = t.maquina_id
+    WHERE t.maquina_id IN UNNEST(machine_ids)
+      AND DATE(t.leitura_hora, 'America/Sao_Paulo')
+          BETWEEN @fromDate AND @toDate
+    ORDER BY
+      t.maquina_id,
+      t.leitura_hora
   `;
 
   const options = {

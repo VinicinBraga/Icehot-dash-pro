@@ -5,9 +5,11 @@ import type { Filters } from "@/lib/types";
 export function useTemperatureHistory(
   from: Date,
   to: Date,
-  filters?: Filters
+  filters?: Filters,
+  enabled = true
 ) {
   return useQuery({
+    enabled,
     queryKey: [
       "temperature-history",
       from,
