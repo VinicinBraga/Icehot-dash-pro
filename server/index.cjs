@@ -78,6 +78,23 @@ app.use((req, res, next) => {
 
 app.use(express.json());
 
+// Bloqueio temporário de chamadas automáticas vindas do Supabase Edge Runtime
+app.use((req, res, next) => {
+  const userAgent = String(req.headers["user-agent"] || "");
+
+  if (userAgent.includes("SupabaseEdgeRuntime")) {
+    console.warn("Request bloqueado do Supabase Edge Runtime:", {
+      method: req.method,
+      path: req.originalUrl,
+    });
+
+    return res.status(403).json({
+      error: "Acesso automatizado bloqueado",
+    });
+  }
+
+  next();
+});
 /* --------------------- Config / Helpers --------------------- */
 
 const LITERS_SCALE = 0.001;
@@ -659,33 +676,27 @@ app.get("/api/kpis", async (req, res) => {
         const json = await resp.json();
         aspersorSelected = Boolean(json?.data?.aspersor);
       } else {
-        // ✅ sem filtro de equipamento: se QUALQUER máquina do usuário tiver aspersor=1 no cadastro, habilita
-        const checks = await Promise.all(
-          machineIds.map(async (id) => {
-            try {
-              const resp = await fetch(
-                `${CADASTRO_API_BASE}/equipamentos/${id}/modules`
-              );
-              const json = await resp.json();
-              return Boolean(json?.data?.aspersor);
-            } catch {
-              return false;
-            }
-          })
+        const idsParam = machineIds.join(",");
+      
+        const resp = await fetch(
+          `${CADASTRO_API_BASE}/equipamentos/modules?ids=${encodeURIComponent(idsParam)}`
         );
-
-        aspersorSelected = checks.some(Boolean);
+      
+        if (!resp.ok) {
+          throw new Error(`Modules batch HTTP ${resp.status}`);
+        }
+      
+        const json = await resp.json();
+      
+        aspersorSelected = (json?.data || []).some(
+          (item) => Boolean(item.aspersor)
+        );
       }
     } catch (e) {
       console.warn("Falha ao consultar aspersor no cadastro:", e?.message || e);
     }
     // 2) Agora buscamos os KPIs no BigQuery
     const row = await getKpisFromBigQuery(machineIds, fromStr, toStr);
-    const aggRows = await getEquipmentAggregatesFromBigQuery(
-      machineIds,
-      fromStr,
-      toStr
-    );
 
     const sum_v_fria = Number(row?.sum_v_fria || 0);
     const sum_v_quente = Number(row?.sum_v_quente || 0);
@@ -711,7 +722,9 @@ app.get("/api/kpis", async (req, res) => {
     const trg_aspersor = aspersorSelected ? sum_c_asp : 0;
     const trg_total = trg_fria + trg_quente + trg_pets + trg_aspersor;
 
-    const equipamentos_utilizados = (aggRows || []).length;
+    const equipamentos_utilizados = Number(
+      row?.equipamentos_utilizados || 0
+    );
 
     const garrafas_poupadas = litros_total / BOTTLE_LITERS;
     const co2_poupado_kg = litros_total * CO2_PER_LITER_KG;
@@ -870,20 +883,21 @@ app.get("/api/series/triggers", async (req, res) => {
         const json = await resp.json();
         aspersorSelected = Boolean(json?.data?.aspersor);
       } else {
-        const checks = await Promise.all(
-          machineIds.map(async (id) => {
-            try {
-              const resp = await fetch(
-                `${CADASTRO_API_BASE}/equipamentos/${id}/modules`
-              );
-              const json = await resp.json();
-              return Boolean(json?.data?.aspersor);
-            } catch {
-              return false;
-            }
-          })
+        const idsParam = machineIds.join(",");
+      
+        const resp = await fetch(
+          `${CADASTRO_API_BASE}/equipamentos/modules?ids=${encodeURIComponent(idsParam)}`
         );
-        aspersorSelected = checks.some(Boolean);
+      
+        if (!resp.ok) {
+          throw new Error(`Modules batch HTTP ${resp.status}`);
+        }
+      
+        const json = await resp.json();
+      
+        aspersorSelected = (json?.data || []).some(
+          (item) => Boolean(item.aspersor)
+        );
       }
     } catch (e) {
       console.warn(

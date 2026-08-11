@@ -22,6 +22,7 @@ async function getKpisFromBigQuery(machineIds, fromDate, toDate) {
       sum_c_quente: 0,
       sum_c_pet: 0,
       sum_c_asp: 0,
+      equipamentos_utilizados: 0,
     };
   }
 
@@ -38,7 +39,8 @@ async function getKpisFromBigQuery(machineIds, fromDate, toDate) {
         SUM(usos_fria_dia)     AS sum_c_fria,
         SUM(usos_quente_dia)   AS sum_c_quente,
         SUM(usos_pet_dia)      AS sum_c_pet,
-        SUM(usos_aspersor_dia) AS sum_c_asp
+        SUM(usos_aspersor_dia) AS sum_c_asp,
+        COUNT(DISTINCT maquina_id) AS equipamentos_utilizados
       FROM \`${PROJECT_ID}.${DATASET_ID}.${FACT_TABLE}\`
       WHERE
         maquina_id IN UNNEST(machine_ids)
@@ -53,7 +55,8 @@ async function getKpisFromBigQuery(machineIds, fromDate, toDate) {
       sum_c_fria,
       sum_c_quente,
       sum_c_pet,
-      sum_c_asp
+      sum_c_asp,
+      equipamentos_utilizados
     FROM agg
   `;
 
