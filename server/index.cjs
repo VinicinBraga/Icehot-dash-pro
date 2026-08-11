@@ -84,6 +84,54 @@ const LITERS_SCALE = 0.001;
 const BOTTLE_LITERS = 0.5;
 const CO2_PER_LITER_KG = 0.1;
 
+// Cache do histórico de temperatura.
+// Os resultados são renovados apenas nas janelas das 06:00 e 12:00,
+// considerando o horário de Brasília.
+const temperatureHistoryCache = new Map();
+
+function getTemperatureHistoryCacheWindow() {
+  const nowInBrazil = new Date(
+    new Date().toLocaleString("en-US", {
+      timeZone: "America/Sao_Paulo",
+    })
+  );
+
+  const year = nowInBrazil.getFullYear();
+  const month = String(nowInBrazil.getMonth() + 1).padStart(2, "0");
+  const day = String(nowInBrazil.getDate()).padStart(2, "0");
+  const hour = nowInBrazil.getHours();
+
+  const windowHour = hour >= 12 ? "12" : hour >= 6 ? "06" : "12-prev";
+
+  // Antes das 06:00, continua usando a janela das 12:00 do dia anterior.
+  if (windowHour === "12-prev") {
+    const previousDay = new Date(nowInBrazil);
+    previousDay.setDate(previousDay.getDate() - 1);
+
+    const previousYear = previousDay.getFullYear();
+    const previousMonth = String(previousDay.getMonth() + 1).padStart(2, "0");
+    const previousDate = String(previousDay.getDate()).padStart(2, "0");
+
+    return `${previousYear}-${previousMonth}-${previousDate}-12`;
+  }
+
+  return `${year}-${month}-${day}-${windowHour}`;
+}
+
+function buildTemperatureHistoryCacheKey(machineIds, fromDate, toDate) {
+  const sortedMachineIds = [...machineIds]
+    .map(Number)
+    .sort((a, b) => a - b)
+    .join(",");
+
+  return [
+    getTemperatureHistoryCacheWindow(),
+    fromDate,
+    toDate,
+    sortedMachineIds,
+  ].join("|");
+}
+
 const asNum = (v) =>
   v === undefined || v === null || v === "" ? undefined : Number(v);
 
@@ -1421,19 +1469,40 @@ app.get("/api/tables/triggers-by-equipment", async (req, res) => {
 
     const aspersorByMachine = new Map();
 
-    await Promise.all(
-      machineIds.map(async (id) => {
-        try {
-          const resp = await fetch(
-            `${CADASTRO_API_BASE}/equipamentos/${id}/modules`
-          );
-          const json = await resp.json();
-          aspersorByMachine.set(id, Boolean(json?.data?.aspersor));
-        } catch {
-          aspersorByMachine.set(id, false);
+    try {
+      const idsParam = machineIds.join(",");
+    
+      const resp = await fetch(
+        `${CADASTRO_API_BASE}/equipamentos/modules?ids=${encodeURIComponent(idsParam)}`
+      );
+    
+      if (!resp.ok) {
+        throw new Error(`Modules batch HTTP ${resp.status}`);
+      }
+    
+      const json = await resp.json();
+    
+      for (const item of json?.data || []) {
+        aspersorByMachine.set(
+          Number(item.maquina_id),
+          Boolean(item.aspersor)
+        );
+      }
+    
+      // garante false para máquinas que eventualmente não vierem na resposta
+      for (const id of machineIds) {
+        if (!aspersorByMachine.has(Number(id))) {
+          aspersorByMachine.set(Number(id), false);
         }
-      })
-    );
+      }
+    } catch (e) {
+      console.error("Erro ao buscar módulos em lote:", e);
+    
+      // fallback seguro
+      for (const id of machineIds) {
+        aspersorByMachine.set(Number(id), false);
+      }
+    }
     const aggRows = await getEquipmentAggregatesFromBigQuery(
       machineIds,
       fromStr,
@@ -2295,11 +2364,46 @@ app.get("/api/series/temperature-history", async (req, res) => {
       });
     }
     
-    const rows = await getTemperatureHistoryFromBigQuery(
+    const currentWindow = getTemperatureHistoryCacheWindow();
+    const cacheKey = buildTemperatureHistoryCacheKey(
       machineIds,
       fromStr,
       toStr
     );
+    
+    // Remove resultados de janelas antigas para não acumular memória.
+    for (const key of temperatureHistoryCache.keys()) {
+      if (!key.startsWith(`${currentWindow}|`)) {
+        temperatureHistoryCache.delete(key);
+      }
+    }
+    
+    let rows;
+    const cachedRows = temperatureHistoryCache.get(cacheKey);
+    
+    if (cachedRows) {
+      rows = cachedRows;
+    
+      console.log("[temperature-history] CACHE HIT", {
+        cacheKey,
+        rows: rows.length,
+      });
+    } else {
+      console.log("[temperature-history] CACHE MISS - consultando BigQuery", {
+        cacheKey,
+        machines: machineIds.length,
+        from: fromStr,
+        to: toStr,
+      });
+    
+      rows = await getTemperatureHistoryFromBigQuery(
+        machineIds,
+        fromStr,
+        toStr
+      );
+    
+      temperatureHistoryCache.set(cacheKey, rows);
+    }
     
     const grouped = {};
     

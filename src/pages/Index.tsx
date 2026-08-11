@@ -121,7 +121,11 @@ const Index = () => {
   const triggerTable = useTriggerTable(dateRange, filters);
   const hotTempTable = useHotTemperatureTable(dateRange.from, dateRange.to, filters);
   // ==== dados equipamentos ====
-  const installations = useInstallationsSeries(dateRange, filters);
+  const installations = useInstallationsSeries(
+    dateRange,
+    filters,
+    activeTab === "equipment"
+  );
   const cumulative = useCumulativeSeries(dateRange, filters);
 
   // ==== dados localização ====

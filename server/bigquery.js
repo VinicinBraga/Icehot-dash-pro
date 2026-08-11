@@ -407,7 +407,7 @@ async function getColdTemperatureNowFromBigQuery(machineIds) {
           PARTITION BY maquina_id
           ORDER BY updated_at DESC, id DESC
         ) AS rn
-      FROM \`${PROJECT_ID}.${DATASET_ID}.informacoes_raw_dedup\`
+      FROM \`${PROJECT_ID}.${DATASET_ID}.informacoes_dedup\`
       WHERE maquina_id = @machine_id
     )
     SELECT
@@ -445,7 +445,7 @@ async function getColdTemperatureByMachineFromBigQuery(machineIds) {
           PARTITION BY maquina_id
           ORDER BY updated_at DESC, id DESC
         ) AS rn
-      FROM \`${PROJECT_ID}.${DATASET_ID}.informacoes_raw_dedup\`
+      FROM \`${PROJECT_ID}.${DATASET_ID}.informacoes_dedup\`
       WHERE maquina_id IN UNNEST(machine_ids)
     )
     SELECT
