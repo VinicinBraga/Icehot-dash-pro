@@ -15,7 +15,12 @@ type HotTempTableData = {
   cold: TempTableBlock;
 };
 
-export function useHotTemperatureTable(from: Date, to: Date, filters?: Filters) {
+export function useHotTemperatureTable(
+  from: Date,
+  to: Date,
+  filters?: Filters,
+  enabled = true
+) {
   const [data, setData] = useState<HotTempTableData>({
     hot: {
       columns: [],
@@ -35,6 +40,10 @@ export function useHotTemperatureTable(from: Date, to: Date, filters?: Filters) 
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (!enabled) {
+      setLoading(false);
+      return;
+    }
     let alive = true;
 
     (async () => {
@@ -75,7 +84,7 @@ export function useHotTemperatureTable(from: Date, to: Date, filters?: Filters) 
     return () => {
       alive = false;
     };
-  }, [from, to, JSON.stringify(filters || {})]);
+  }, [from, to, JSON.stringify(filters || {}), enabled]);
 
   return { data, loading, error };
 }

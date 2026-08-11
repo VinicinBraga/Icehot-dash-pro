@@ -10,13 +10,15 @@ interface LocationKpis {
 
 export function useLocationKpis(
   dateRange: { from: Date; to: Date },
-  filters: Filters
+  filters: Filters,
+  enabled = true
 ) {
   const [data, setData] = useState<LocationKpis | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (!enabled) return;
     const controller = new AbortController();
 
     const run = async () => {
@@ -65,7 +67,7 @@ export function useLocationKpis(
 
     run();
     return () => controller.abort();
-  }, [dateRange, filters]);
+  }, [dateRange, filters, enabled]);
 
   return { data, loading, error };
 }

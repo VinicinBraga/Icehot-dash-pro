@@ -9,13 +9,15 @@ interface SeriesData {
 
 export function useCumulativeSeries(
   dateRange: { from: Date; to: Date },
-  filters: Filters
+  filters: Filters,
+  enabled = true
 ) {
   const [data, setData] = useState<SeriesData | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (!enabled) return;
     const controller = new AbortController();
 
     const run = async () => {
@@ -45,8 +47,7 @@ export function useCumulativeSeries(
         if (!res.ok) {
           const txt = await res.text().catch(() => "");
           throw new Error(
-            `Erro ${res.status} ao carregar série cumulativa de equipamentos${
-              txt ? `: ${txt}` : ""
+            `Erro ${res.status} ao carregar série cumulativa de equipamentos${txt ? `: ${txt}` : ""
             }`
           );
         }
@@ -64,7 +65,7 @@ export function useCumulativeSeries(
 
     run();
     return () => controller.abort();
-  }, [dateRange, filters]);
+  }, [dateRange, filters, enabled]);
 
   return { data, loading, error };
 }

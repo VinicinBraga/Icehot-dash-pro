@@ -117,20 +117,42 @@ const Index = () => {
     filters,
     temperatureHistoryOpen
   );
-  const waterTable = useWaterTable(dateRange, filters);
-  const triggerTable = useTriggerTable(dateRange, filters);
-  const hotTempTable = useHotTemperatureTable(dateRange.from, dateRange.to, filters);
-  // ==== dados equipamentos ====
+  const waterTable = useWaterTable(
+    dateRange,
+    filters,
+    activeTab === "equipment"
+  );
+  const triggerTable = useTriggerTable(
+    dateRange,
+    filters,
+    activeTab === "equipment"
+  );
+  const hotTempTable = useHotTemperatureTable(
+    dateRange.from,
+    dateRange.to,
+    filters,
+    activeTab === "equipment"
+  );
   const installations = useInstallationsSeries(
     dateRange,
     filters,
     activeTab === "equipment"
   );
-  const cumulative = useCumulativeSeries(dateRange, filters);
-
-  // ==== dados localização ====
-  const locationKpis = useLocationKpis(dateRange, filters);
-  const locationSummary = useLocationSummary(dateRange, filters);
+  const cumulative = useCumulativeSeries(
+    dateRange,
+    filters,
+    activeTab === "equipment"
+  );
+  const locationKpis = useLocationKpis(
+    dateRange,
+    filters,
+    activeTab === "location"
+  );
+  const locationSummary = useLocationSummary(
+    dateRange,
+    filters,
+    activeTab === "location"
+  );
 
   // helper visão geral
   const val = (n?: number) => (kpisLoading || !kpis ? 0 : n ?? 0);

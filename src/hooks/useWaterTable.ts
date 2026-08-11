@@ -5,12 +5,20 @@ import type { TableData, Filters } from "@/lib/types";
 
 type DateRange = { from: Date; to: Date };
 
-export function useWaterTable(range: DateRange, filters?: Filters) {
+export function useWaterTable(
+  range: DateRange,
+  filters?: Filters,
+  enabled = true
+) {
   const [data, setData] = useState<TableData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<null | string>(null);
 
   useEffect(() => {
+    if (!enabled) {
+      setLoading(false);
+      return;
+    }
     let cancelled = false;
     setLoading(true);
     setError(null);
@@ -23,7 +31,7 @@ export function useWaterTable(range: DateRange, filters?: Filters) {
     return () => {
       cancelled = true;
     };
-  }, [range.from, range.to, JSON.stringify(filters)]);
+  }, [range.from, range.to, JSON.stringify(filters), enabled]);
 
   return { data, loading, error };
 }
