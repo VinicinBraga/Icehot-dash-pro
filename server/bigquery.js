@@ -1,14 +1,17 @@
 // server/bigquery.js
 const { BigQuery } = require("@google-cloud/bigquery");
 
-const bigquery = new BigQuery();
-
 // Ajusta se o dataset/tabela mudarem no futuro
 const PROJECT_ID = process.env.BQ_PROJECT_ID;
 
 if (!PROJECT_ID) {
   throw new Error("BQ_PROJECT_ID não definido");
 }
+
+const bigquery = new BigQuery({
+  projectId: PROJECT_ID,
+});
+
 const DATASET_ID = "Dashboard_ICEHOT";
 const FACT_TABLE = "fact_informacoes_diaria_v";
 

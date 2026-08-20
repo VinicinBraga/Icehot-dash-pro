@@ -37,7 +37,7 @@ export function useModelPie(range: DateRange, filters: Filters) {
     range.to,
     filters.usuario,
     filters.modelo,
-    filters.equipamento,
+    filters.equipamentos,
     filters.serie,
     filters.status,
   ]);

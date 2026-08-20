@@ -1,6 +1,14 @@
+import { ChevronDown } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import { useMemo } from "react";
 import { mockFilterOptions } from "@/lib/mockData";
-import type { FilterOptions } from "@/lib/types";
+import type { FilterOptions, Filters } from "@/lib/types";
 import {
   Select,
   SelectTrigger,
@@ -8,14 +16,6 @@ import {
   SelectContent,
   SelectItem,
 } from "@/components/ui/select";
-
-interface Filters {
-  usuario?: number;
-  modelo?: number;
-  equipamento?: number;
-  serie?: string;
-  status?: string;
-}
 
 interface FilterBarProps {
   filters: Filters;
@@ -96,29 +96,66 @@ export function FilterBar({
         </SelectContent>
       </Select>
 
-      {/* Equipamento */}
-      <Select
-        value={filters.equipamento?.toString()}
-        onValueChange={(value) =>
-          onChange({
-            ...filters,
-            equipamento: value === "all" ? undefined : Number(value),
-          })
-        }
-        disabled={loading}
-      >
-        <SelectTrigger className="rounded-xl">
-          <SelectValue placeholder="Equipamento" />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value="all">Todos</SelectItem>
-          {opts.equipamentos.map((e) => (
-            <SelectItem key={e.value} value={e.value.toString()}>
-              {e.label}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
+{/* Equipamento */}
+<Popover>
+  <PopoverTrigger asChild>
+    <Button
+      variant="outline"
+      disabled={loading}
+      className="w-full justify-between rounded-xl font-normal"
+    >
+      <span className="truncate">
+        {!filters.equipamentos?.length
+          ? "Equipamento"
+          : filters.equipamentos.length === 1
+            ? opts.equipamentos.find(
+                (e) => Number(e.value) === filters.equipamentos?.[0]
+              )?.label ?? "1 equipamento selecionado"
+            : `${filters.equipamentos.length} equipamentos selecionados`}
+      </span>
+
+      <ChevronDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+    </Button>
+  </PopoverTrigger>
+
+  <PopoverContent
+    align="start"
+    className="w-[var(--radix-popover-trigger-width)] p-2"
+  >
+    <div className="max-h-64 overflow-y-auto">
+      {opts.equipamentos.map((e) => {
+        const id = Number(e.value);
+        const selected = filters.equipamentos?.includes(id) ?? false;
+
+        return (
+          <label
+            key={e.value}
+            className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-2 hover:bg-accent"
+          >
+            <Checkbox
+              checked={selected}
+              onCheckedChange={(checked) => {
+                const atuais = filters.equipamentos ?? [];
+
+                const equipamentos = checked
+                  ? [...atuais, id]
+                  : atuais.filter((item) => item !== id);
+
+                onChange({
+                  ...filters,
+                  equipamentos:
+                    equipamentos.length > 0 ? equipamentos : undefined,
+                });
+              }}
+            />
+
+            <span className="text-sm">{e.label}</span>
+          </label>
+        );
+      })}
+    </div>
+  </PopoverContent>
+</Popover>
 
       {/* Nº de Série *
       <Select

@@ -94,7 +94,7 @@ const Index = () => {
 
   const selectedEquip = (
     filterOptions?.equipamentos as EquipmentFilterItem[] | undefined
-  )?.find((e) => String(e.value) === String(filters?.equipamento));
+  )?.find((e) => String(e.value) === String(filters?.equipamentos));
 
   const installedBR = selectedEquip?.installedAt
     ? new Date(selectedEquip.installedAt + "T00:00:00").toLocaleDateString(
@@ -120,18 +120,19 @@ const Index = () => {
   const waterTable = useWaterTable(
     dateRange,
     filters,
-    activeTab === "equipment"
+    activeTab === "overview"
   );
+
   const triggerTable = useTriggerTable(
     dateRange,
     filters,
-    activeTab === "equipment"
+    activeTab === "overview"
   );
   const hotTempTable = useHotTemperatureTable(
     dateRange.from,
     dateRange.to,
     filters,
-    activeTab === "equipment"
+    activeTab === "overview"
   );
   const installations = useInstallationsSeries(
     dateRange,
@@ -267,8 +268,8 @@ const Index = () => {
     if (filters.modelo !== undefined && filters.modelo !== null) {
       params.set("modelo", String(filters.modelo));
     }
-    if (filters.equipamento !== undefined && filters.equipamento !== null) {
-      params.set("equipamento", String(filters.equipamento));
+    if (filters.equipamentos?.length) {
+      params.set("equipamentos", filters.equipamentos.join(","));
     }
     if (filters.serie) {
       params.set("serie", String(filters.serie));
@@ -323,8 +324,8 @@ const Index = () => {
     if (filters.modelo !== undefined && filters.modelo !== null) {
       params.set("modelo", String(filters.modelo));
     }
-    if (filters.equipamento !== undefined && filters.equipamento !== null) {
-      params.set("equipamento", String(filters.equipamento));
+    if (filters.equipamentos?.length) {
+      params.set("equipamentos", filters.equipamentos.join(","));
     }
     if (filters.serie) {
       params.set("serie", String(filters.serie));
@@ -416,9 +417,9 @@ const Index = () => {
             {/* “Pílula” do período – mais comprida e alta */}
             <div
               className="
-                hidden sm:flex items-center 
-                rounded-full border border-border bg-background 
-                px-5 py-2 
+                hidden sm:flex items-center
+                rounded-full border border-border bg-background
+                px-5 py-2
                 min-w-[320px]
                 text-sm
                 justify-between
@@ -444,15 +445,15 @@ const Index = () => {
               variant="outline"
               className="
                 h-[40px]
-                rounded-full 
+                rounded-full
                 px-5
-                border-border 
-                bg-muted 
+                border-border
+                bg-muted
                 text-foreground
-                hover:bg-[#1105f2] 
-                hover:text-white 
+                hover:bg-[#1105f2]
+                hover:text-white
                 hover:border-[#1105f2]
-                transition-all 
+                transition-all
                 flex items-center gap-2
               "
               onClick={() => {
@@ -508,7 +509,7 @@ const Index = () => {
             </TabsList>
 
             {/* Info instalação (placeholder) */}
-            {filters?.equipamento && (
+            {filters?.equipamentos && (
               <div className="flex-1 rounded-xl border bg-white/60 px-4 py-2 text-sm text-muted-foreground h-14 flex items-center">
                 Equipamento instalado desde o dia{" "}
                 <b className="ml-1">{installedBR || "—"}</b>
@@ -523,7 +524,7 @@ const Index = () => {
               >
                 Ver histórico de temperatura
               </Button>
-            </div>  
+            </div>
 
           {/* Overview Tab */}
           <TabsContent value="overview" className="space-y-6 mt-6">
@@ -649,7 +650,7 @@ const Index = () => {
                 icon={<Cloud />}
               />
             </div>
-  
+
             {/* Charts */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               <WaterChart
@@ -763,7 +764,7 @@ const Index = () => {
               );
             })()}
           </TabsContent>
-          
+
           {/* Equipment Tab */}
           <TabsContent value="equipment" className="space-y-6 mt-6">
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">

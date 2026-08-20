@@ -26,7 +26,7 @@ export interface KpiData {
   };
 
   _period?: { from: string; to: string; email: string };
-  
+
 }
 
 // === Séries (recharts) ===
@@ -90,7 +90,7 @@ export interface FilterOptions {
 export interface Filters {
   usuario?: number;
   modelo?: number;
-  equipamento?: number;
+  equipamentos?: number[];
   serie?: string;
   status?: string;
 }

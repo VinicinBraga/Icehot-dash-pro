@@ -284,7 +284,14 @@ async function getCityCoords(pool, cidadeRaw, ufRaw) {
 async function resolveMachineIds(userEmail, q = {}, isMaster = false) {
   const usuario = asNum(q.usuario);
   const modelo = asNum(q.modelo);
-  const equipamento = asNum(q.equipamento);
+
+  const equipamentos = String(q.equipamentos || "")
+    .split(",")
+    .map((id) => Number(id))
+    .filter((id) => Number.isFinite(id) && id > 0);
+
+  const equipamentoLegado = asNum(q.equipamento);
+
   const serie = q.serie?.trim();
   const status = q.status?.trim();
 
@@ -326,9 +333,16 @@ async function resolveMachineIds(userEmail, q = {}, isMaster = false) {
 
   if (!baseIds.length) return [];
 
-  // filtro de equipamento tem precedência
-  if (equipamento) {
-    return baseIds.includes(equipamento) ? [equipamento] : [];
+  // filtro de equipamentos tem precedência
+  if (equipamentos.length) {
+    return baseIds.filter((id) => equipamentos.includes(id));
+  }
+
+  // compatibilidade temporária com chamadas antigas
+  if (equipamentoLegado) {
+    return baseIds.includes(equipamentoLegado)
+      ? [equipamentoLegado]
+      : [];
   }
 
   // filtros adicionais em cima do conjunto base
@@ -538,7 +552,7 @@ app.get("/api/kpis", async (req, res) => {
     // Usa o email vindo do JWT (middleware de auth já preenche req.userEmail)
     const userEmail = req.userEmail || req.header("x-user-email") || null;
     const { from, to } = req.query; // esperado YYYY-MM-DD
-  
+
     // datas padrão (últimos 30 dias)
     const defaultTo = new Date();
     const defaultFrom = new Date();
@@ -666,32 +680,21 @@ app.get("/api/kpis", async (req, res) => {
     let aspersorSelected = false;
 
     try {
-      // se tiver 1 equipamento filtrado, consulta só ele
-      if (req.query.equipamento) {
-        const equipamentoId = Number(req.query.equipamento);
+      const idsParam = machineIds.join(",");
 
-        const resp = await fetch(
-          `${CADASTRO_API_BASE}/equipamentos/${equipamentoId}/modules`
-        );
-        const json = await resp.json();
-        aspersorSelected = Boolean(json?.data?.aspersor);
-      } else {
-        const idsParam = machineIds.join(",");
-      
-        const resp = await fetch(
-          `${CADASTRO_API_BASE}/equipamentos/modules?ids=${encodeURIComponent(idsParam)}`
-        );
-      
-        if (!resp.ok) {
-          throw new Error(`Modules batch HTTP ${resp.status}`);
-        }
-      
-        const json = await resp.json();
-      
-        aspersorSelected = (json?.data || []).some(
-          (item) => Boolean(item.aspersor)
-        );
+      const resp = await fetch(
+        `${CADASTRO_API_BASE}/equipamentos/modules?ids=${encodeURIComponent(idsParam)}`
+      );
+
+      if (!resp.ok) {
+        throw new Error(`Modules batch HTTP ${resp.status}`);
       }
+
+      const json = await resp.json();
+
+      aspersorSelected = (json?.data || []).some(
+        (item) => Boolean(item.aspersor)
+      );
     } catch (e) {
       console.warn("Falha ao consultar aspersor no cadastro:", e?.message || e);
     }
@@ -807,7 +810,7 @@ app.get("/api/series/water", async (req, res) => {
       const dt = new Date(Number(y), Number(m) - 1, 1);
       return dt.toLocaleDateString("pt-BR", { month: "short" }).replace(".", "");
     });
-    
+
     const series = [
       {
         key: "total",
@@ -822,7 +825,7 @@ app.get("/api/series/water", async (req, res) => {
       { key: "quente", values: rows.map((r) => Number(r.sum_v_quente || 0)) },
       { key: "pets", values: rows.map((r) => Number(r.sum_v_pet || 0)) },
     ];
-    
+
     return res.json({
       labels,
       series,
@@ -873,32 +876,26 @@ app.get("/api/series/triggers", async (req, res) => {
       });
     }
     // ✅ aspersor só aparece se estiver selecionado no cadastro
+    // ✅ aspersor só aparece se estiver selecionado no cadastro
+
     let aspersorSelected = false;
+
     try {
-      if (req.query.equipamento) {
-        const equipamentoId = Number(req.query.equipamento);
-        const resp = await fetch(
-          `${CADASTRO_API_BASE}/equipamentos/${equipamentoId}/modules`
-        );
-        const json = await resp.json();
-        aspersorSelected = Boolean(json?.data?.aspersor);
-      } else {
-        const idsParam = machineIds.join(",");
-      
-        const resp = await fetch(
-          `${CADASTRO_API_BASE}/equipamentos/modules?ids=${encodeURIComponent(idsParam)}`
-        );
-      
-        if (!resp.ok) {
-          throw new Error(`Modules batch HTTP ${resp.status}`);
-        }
-      
-        const json = await resp.json();
-      
-        aspersorSelected = (json?.data || []).some(
-          (item) => Boolean(item.aspersor)
-        );
+      const idsParam = machineIds.join(",");
+
+      const resp = await fetch(
+        `${CADASTRO_API_BASE}/equipamentos/modules?ids=${encodeURIComponent(idsParam)}`
+      );
+
+      if (!resp.ok) {
+        throw new Error(`Modules batch HTTP ${resp.status}`);
       }
+
+      const json = await resp.json();
+
+      aspersorSelected = (json?.data || []).some(
+        (item) => Boolean(item.aspersor)
+      );
     } catch (e) {
       console.warn(
         "Falha ao consultar aspersor no cadastro (series/triggers):",
@@ -1420,23 +1417,23 @@ app.get("/api/tables/equipment-list", async (req, res) => {
       `,
       [visibleMachineIds]
     );
-    
+
     const formatted = rowsRaw.map((r) => {
       const dataInst = r.data_instalacao ? new Date(r.data_instalacao) : null;
       if (dataInst) dataInst.setMonth(dataInst.getMonth() + 6);
-    
+
       const proxTroca = dataInst ? dataInst.toISOString().slice(0, 10) : "Sem data";
-    
+
       const statusNum = Number(r.status);
-    
+
       let statusFormatado;
       if (statusNum === 0) statusFormatado = "Ativo";
       else if (statusNum === 1 || statusNum === 2) statusFormatado = "Inativo";
       else statusFormatado = "Desconhecido";
-    
+
       return [r.equipamento, r.modelo, statusFormatado, proxTroca];
     });
-    
+
     return res.json({
       columns: ["Equipamento", "Modelo", "Status", "Próx. troca filtro"],
       rows: formatted,
@@ -1485,24 +1482,24 @@ app.get("/api/tables/triggers-by-equipment", async (req, res) => {
 
     try {
       const idsParam = machineIds.join(",");
-    
+
       const resp = await fetch(
         `${CADASTRO_API_BASE}/equipamentos/modules?ids=${encodeURIComponent(idsParam)}`
       );
-    
+
       if (!resp.ok) {
         throw new Error(`Modules batch HTTP ${resp.status}`);
       }
-    
+
       const json = await resp.json();
-    
+
       for (const item of json?.data || []) {
         aspersorByMachine.set(
           Number(item.maquina_id),
           Boolean(item.aspersor)
         );
       }
-    
+
       // garante false para máquinas que eventualmente não vierem na resposta
       for (const id of machineIds) {
         if (!aspersorByMachine.has(Number(id))) {
@@ -1511,7 +1508,7 @@ app.get("/api/tables/triggers-by-equipment", async (req, res) => {
       }
     } catch (e) {
       console.error("Erro ao buscar módulos em lote:", e);
-    
+
       // fallback seguro
       for (const id of machineIds) {
         aspersorByMachine.set(Number(id), false);
@@ -2325,7 +2322,7 @@ const coldRows = (coldTemps || [])
       },
     });
   }
-  
+
   return res.json({
     hot: {
       columns: ["Equipamento", "Temperatura (°C)", "Leitura"],
@@ -2377,27 +2374,27 @@ app.get("/api/series/temperature-history", async (req, res) => {
         _period: { from: fromStr, to: toStr, email: userEmail },
       });
     }
-    
+
     const currentWindow = getTemperatureHistoryCacheWindow();
     const cacheKey = buildTemperatureHistoryCacheKey(
       machineIds,
       fromStr,
       toStr
     );
-    
+
     // Remove resultados de janelas antigas para não acumular memória.
     for (const key of temperatureHistoryCache.keys()) {
       if (!key.startsWith(`${currentWindow}|`)) {
         temperatureHistoryCache.delete(key);
       }
     }
-    
+
     let rows;
     const cachedRows = temperatureHistoryCache.get(cacheKey);
-    
+
     if (cachedRows) {
       rows = cachedRows;
-    
+
       console.log("[temperature-history] CACHE HIT", {
         cacheKey,
         rows: rows.length,
@@ -2409,21 +2406,21 @@ app.get("/api/series/temperature-history", async (req, res) => {
         from: fromStr,
         to: toStr,
       });
-    
+
       rows = await getTemperatureHistoryFromBigQuery(
         machineIds,
         fromStr,
         toStr
       );
-    
+
       temperatureHistoryCache.set(cacheKey, rows);
     }
-    
+
     const grouped = {};
-    
+
     for (const row of rows) {
       const machineId = row.maquina_id;
-    
+
       if (!grouped[machineId]) {
         grouped[machineId] = {
           maquina_id: machineId,
@@ -2436,27 +2433,27 @@ app.get("/api/series/temperature-history", async (req, res) => {
           rows: [],
         };
       }
-    
+
       grouped[machineId].labels.push(row.leitura_em);
-    
+
       grouped[machineId].series[0].values.push(
         row.temperatura_quente == null ? null : Number(row.temperatura_quente)
       );
-    
+
       grouped[machineId].series[1].values.push(
         row.temperatura_fria == null ? null : Number(row.temperatura_fria)
       );
-    
+
       grouped[machineId].rows.push(row);
     }
-    
+
     return res.json({
       equipments: Object.values(grouped),
       total: rows.length,
       total_equipments: Object.keys(grouped).length,
       _period: { from: fromStr, to: toStr, email: userEmail },
     });
-    
+
   } catch (e) {
     console.error("Erro em /api/series/temperature-history:", e);
     res.status(500).json({ error: String(e) });

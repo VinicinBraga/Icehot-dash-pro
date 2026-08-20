@@ -35,8 +35,8 @@ export function useLocationKpis(
 
         if (filters.usuario) params.set("usuario", String(filters.usuario));
         if (filters.modelo) params.set("modelo", String(filters.modelo));
-        if (filters.equipamento)
-          params.set("equipamento", String(filters.equipamento));
+        if (filters.equipamentos?.length)
+          params.set("equipamentos", filters.equipamentos.join(","));
         if (filters.serie) params.set("serie", String(filters.serie));
         if (filters.status) params.set("status", String(filters.status));
 
@@ -48,8 +48,7 @@ export function useLocationKpis(
         if (!res.ok) {
           const txt = await res.text().catch(() => "");
           throw new Error(
-            `Erro ${res.status} ao carregar KPIs de localização${
-              txt ? `: ${txt}` : ""
+            `Erro ${res.status} ao carregar KPIs de localização${txt ? `: ${txt}` : ""
             }`
           );
         }

@@ -37,8 +37,8 @@ function appendFilters(url: URL, f?: Filters) {
     url.searchParams.set("modelo", String(f.modelo));
   }
 
-  if (f.equipamento !== undefined && f.equipamento !== null) {
-    url.searchParams.set("equipamento", String(f.equipamento));
+  if (f.equipamentos?.length) {
+    url.searchParams.set("equipamentos", f.equipamentos.join(","));
   }
 
   if (f.serie) {
