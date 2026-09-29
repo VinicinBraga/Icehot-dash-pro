@@ -6,18 +6,14 @@ const { pool } = require("./db.cjs");
 const jwt = require("jsonwebtoken");
 const JWT_SECRET =
   process.env.JWT_SECRET || "icehot-dashboard-super-secret-2025";
-console.log(
-  "TOKEN DEBUG (startup):",
-  jwt.sign(
-    { id: 198, email: "user01@teste.com.br", isMaster: false },
-    JWT_SECRET,
-    { expiresIn: "7d" }
-  )
-);
 
 const bcrypt = require("bcryptjs");
 const app = express();
 const fetch = require("node-fetch");
+const MODULES_SERVICE_JWT_SECRET = process.env.MODULES_SERVICE_JWT_SECRET;
+const MODULES_SERVICE_JWT_ISSUER = process.env.MODULES_SERVICE_JWT_ISSUER || "icehot-dash-pro";
+const MODULES_SERVICE_JWT_AUDIENCE = process.env.MODULES_SERVICE_JWT_AUDIENCE || "icehot-api-modules";
+const MODULES_SERVICE_JWT_SCOPE = process.env.MODULES_SERVICE_JWT_SCOPE || "equipment-modules:read";
 const CADASTRO_API_BASE = (
   process.env.CADASTRO_API_BASE || "http://localhost:7070"
 ).replace(/\/$/, "");
@@ -41,6 +37,39 @@ const MASTER_EMAILS = [
   "contato@icehot.net.br",
   "contato@devontecnologia.com.br",
 ];
+
+function createModulesServiceToken() {
+  if (!MODULES_SERVICE_JWT_SECRET) throw new Error("MODULES_SERVICE_JWT_SECRET is not configured");
+  return jwt.sign(
+    { sub: "icehot-dash-pro", service: "icehot-dash-pro", scope: MODULES_SERVICE_JWT_SCOPE },
+    MODULES_SERVICE_JWT_SECRET,
+    { algorithm: "HS256", issuer: MODULES_SERVICE_JWT_ISSUER, audience: MODULES_SERVICE_JWT_AUDIENCE, expiresIn: "60s" }
+  );
+}
+
+async function fetchEquipmentModules(machineIds) {
+  const serviceToken = createModulesServiceToken();
+  const idsParam = machineIds.join(",");
+  const resp = await fetch(
+    `${CADASTRO_API_BASE}/equipamentos/modules?ids=${encodeURIComponent(idsParam)}`,
+    { headers: { Authorization: `Bearer ${serviceToken}` } }
+  );
+
+  if (!resp.ok) {
+    throw Object.assign(new Error(`Modules batch HTTP ${resp.status}`), { statusCode: 502 });
+  }
+
+  const json = await resp.json();
+  if (!json || json.ok !== true || !Array.isArray(json.data)) {
+    throw Object.assign(new Error("Invalid modules batch response"), { statusCode: 502 });
+  }
+
+  console.log("Modules batch loaded", {
+    machineIdsCount: machineIds.length,
+    returnedCount: json.data.length,
+  });
+  return json.data;
+}
 
 /* --------------------------- CORS --------------------------- */
 const ENV_ORIGINS = (process.env.ALLOWED_ORIGINS || "")
@@ -162,14 +191,6 @@ function signToken(user) {
     email: user.email,
     isMaster,
   };
-  console.log(
-    "TOKEN DEBUG:",
-    jwt.sign(
-      { id: 198, email: "user01@teste.com.br", isMaster: false },
-      JWT_SECRET,
-      { expiresIn: "7d" }
-    )
-  );
   return jwt.sign(payload, JWT_SECRET, { expiresIn: "7d" });
 }
 
@@ -680,23 +701,13 @@ app.get("/api/kpis", async (req, res) => {
     let aspersorSelected = false;
 
     try {
-      const idsParam = machineIds.join(",");
-
-      const resp = await fetch(
-        `${CADASTRO_API_BASE}/equipamentos/modules?ids=${encodeURIComponent(idsParam)}`
-      );
-
-      if (!resp.ok) {
-        throw new Error(`Modules batch HTTP ${resp.status}`);
-      }
-
-      const json = await resp.json();
-
-      aspersorSelected = (json?.data || []).some(
-        (item) => Boolean(item.aspersor)
-      );
+      const data = await fetchEquipmentModules(machineIds);
+      aspersorSelected = data.some((item) => Boolean(item.aspersor));
     } catch (e) {
       console.warn("Falha ao consultar aspersor no cadastro:", e?.message || e);
+      return res.status(e.statusCode || 502).json({
+        error: "Não foi possível consultar os módulos dos equipamentos",
+      });
     }
     // 2) Agora buscamos os KPIs no BigQuery
     const row = await getKpisFromBigQuery(machineIds, fromStr, toStr);
@@ -762,7 +773,7 @@ app.get("/api/kpis", async (req, res) => {
     });
   } catch (e) {
     console.error("Erro em /api/kpis:", e);
-    res.status(500).json({ error: String(e) });
+    res.status(e.statusCode || 500).json({ error: String(e) });
   }
 });
 
@@ -881,26 +892,16 @@ app.get("/api/series/triggers", async (req, res) => {
     let aspersorSelected = false;
 
     try {
-      const idsParam = machineIds.join(",");
-
-      const resp = await fetch(
-        `${CADASTRO_API_BASE}/equipamentos/modules?ids=${encodeURIComponent(idsParam)}`
-      );
-
-      if (!resp.ok) {
-        throw new Error(`Modules batch HTTP ${resp.status}`);
-      }
-
-      const json = await resp.json();
-
-      aspersorSelected = (json?.data || []).some(
-        (item) => Boolean(item.aspersor)
-      );
+      const data = await fetchEquipmentModules(machineIds);
+      aspersorSelected = data.some((item) => Boolean(item.aspersor));
     } catch (e) {
       console.warn(
         "Falha ao consultar aspersor no cadastro (series/triggers):",
         e?.message || e
       );
+      return res.status(e.statusCode || 502).json({
+        error: "Não foi possível consultar os módulos dos equipamentos",
+      });
     }
 
     // 2) Busca as séries mensais no BigQuery
@@ -954,7 +955,7 @@ app.get("/api/series/triggers", async (req, res) => {
     });
   } catch (e) {
     console.error("Erro em /api/series/triggers:", e);
-    res.status(500).json({ error: String(e) });
+    res.status(e.statusCode || 500).json({ error: String(e) });
   }
 });
 
@@ -1481,19 +1482,9 @@ app.get("/api/tables/triggers-by-equipment", async (req, res) => {
     const aspersorByMachine = new Map();
 
     try {
-      const idsParam = machineIds.join(",");
+      const data = await fetchEquipmentModules(machineIds);
 
-      const resp = await fetch(
-        `${CADASTRO_API_BASE}/equipamentos/modules?ids=${encodeURIComponent(idsParam)}`
-      );
-
-      if (!resp.ok) {
-        throw new Error(`Modules batch HTTP ${resp.status}`);
-      }
-
-      const json = await resp.json();
-
-      for (const item of json?.data || []) {
+      for (const item of data) {
         aspersorByMachine.set(
           Number(item.maquina_id),
           Boolean(item.aspersor)
@@ -1508,11 +1499,9 @@ app.get("/api/tables/triggers-by-equipment", async (req, res) => {
       }
     } catch (e) {
       console.error("Erro ao buscar módulos em lote:", e);
-
-      // fallback seguro
-      for (const id of machineIds) {
-        aspersorByMachine.set(Number(id), false);
-      }
+      return res.status(e.statusCode || 502).json({
+        error: "Não foi possível consultar os módulos dos equipamentos",
+      });
     }
     const aggRows = await getEquipmentAggregatesFromBigQuery(
       machineIds,

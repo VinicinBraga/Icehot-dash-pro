@@ -149,6 +149,22 @@ Frontend (Vercel)
 env
 
 VITE_API_URL=https://<url-da-api>
+
+Autenticação service-to-service dos módulos
+
+O backend do dashboard e a API de cadastro precisam compartilhar, via Secret
+Manager/Cloud Run, `MODULES_SERVICE_JWT_SECRET`. Não versionar o valor do
+secret. As variáveis públicas do contrato são:
+
+```env
+MODULES_SERVICE_JWT_ISSUER=icehot-dash-pro
+MODULES_SERVICE_JWT_AUDIENCE=icehot-api-modules
+MODULES_SERVICE_JWT_SERVICE=icehot-dash-pro
+MODULES_SERVICE_JWT_SCOPE=equipment-modules:read
+```
+
+`MODULES_SERVICE_JWT_SERVICE` é usado pela API; as demais variáveis devem ter
+os mesmos valores nos dois serviços. O secret é o único valor sensível.
 Como Rodar Localmente
 1. Clone o repositório
 bash
